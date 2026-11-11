@@ -95,3 +95,10 @@ Write-Output ''
 Write-Output "Built: $exe"
 Write-Output ("Size : " + (Get-Item -LiteralPath $exe).Length + " bytes")
 Write-Output ("SHA-256: " + (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant())
+
+# Publish a copy to a stable, easy-to-find location.
+$dist = Join-Path $repo 'dist'
+New-Item -ItemType Directory -Path $dist -Force | Out-Null
+$published = Join-Path $dist 'mw4patch.exe'
+Copy-Item -LiteralPath $exe -Destination $published -Force
+Write-Output "Published: $published"

@@ -167,9 +167,9 @@ windowed shortcut, and writes an install record with uninstall support.
 ```powershell
 pwsh ./src/patcher/build.ps1
 
-.\artifacts\mw4patch.exe verify  "MekTek\Mechwarrior Mercenaries - Mektek Mekpak"
-.\artifacts\mw4patch.exe install "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
-.\artifacts\mw4patch.exe uninstall "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
+.\dist\mw4patch.exe verify  "MekTek\Mechwarrior Mercenaries - Mektek Mekpak"
+.\dist\mw4patch.exe install "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
+.\dist\mw4patch.exe uninstall "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
 ```
 
 See `docs/PATCHER.md` for the install record, backups, and current limitations.

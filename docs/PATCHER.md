@@ -39,11 +39,11 @@ If `install-dir` is omitted, the current directory is used.
 Examples:
 
 ```powershell
-.\artifacts\mw4patch.exe verify "MekTek\Mechwarrior Mercenaries - Mektek Mekpak"
+.\dist\mw4patch.exe verify "MekTek\Mechwarrior Mercenaries - Mektek Mekpak"
 
-.\artifacts\mw4patch.exe install "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
+.\dist\mw4patch.exe install "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
 
-.\artifacts\mw4patch.exe uninstall "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
+.\dist\mw4patch.exe uninstall "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
 ```
 
 ## Output and exit codes
@@ -79,11 +79,12 @@ changes.
 
 ```powershell
 pwsh ./src/hook/build.ps1      # builds the embedded ddraw.dll and config
-pwsh ./src/patcher/build.ps1   # builds artifacts/mw4patch.exe
+pwsh ./src/patcher/build.ps1   # builds artifacts/mw4patch.exe and publishes dist/mw4patch.exe
 ```
 
 The patcher build generates an RC file, compiles the resources with `rc.exe`,
-and links a single console executable (`/MT`, no VC++ redistributable).
+and links a single console executable (`/MT`, no VC++ redistributable). Use
+`dist\mw4patch.exe` for testing; it is the stable copy of the build output.
 
 ## Current limitations
 

@@ -24,3 +24,7 @@
 *.log
 *.bak
 *.bak-*
+
+# Published local build (the README is tracked; binaries are not).
+/dist/*.exe
+/dist/*.pdb
