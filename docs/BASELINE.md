@@ -11,8 +11,8 @@
 | Total size | 2,300,465,618 bytes (2.14 GiB) |
 | Status | Known-good; launches on Windows 11 / AMD Radeon AI PRO R9700 with a valid `options.ini` |
 
-This folder matches the independently working install on `D:\mektek.net`.
-It is the baseline for all future manifests and patching work.
+This folder matches an independently verified working install. It is the
+baseline for all future manifests and patching work.
 
 ## Core hashes
 
@@ -83,8 +83,8 @@ old file first.
 
 ## Important differences from the old MTX chain
 
-The MTX-chain install in `C:\Program Files (x86)\mektek.net\...` reports the
-same `51.03.01.0030` version string but is not the same build:
+The install produced by the legacy MTX chain reports the same
+`51.03.01.0030` version string but is not the same build:
 
 | File | ModDB 3.1c baseline | MTX-chain install |
 |---|---|---|

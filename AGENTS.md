@@ -176,7 +176,9 @@ Windows first. Extending the list beyond 1600x1200 is a later change.
 
 ### 4.4 The decompilation is a different binary
 
-`C:\repos\Mech4MercDecomp` is a byte-identical oracle for the **retail PR1**
+A local clone of
+[Mech4MercDecomp](https://github.com/mech4decomp/Mech4MercDecomp), for example
+at `..\Mech4MercDecomp`, is a byte-identical oracle for the **retail PR1**
 build:
 
 | | Retail PR1 oracle | Our supported 3.1c build |
@@ -256,9 +258,9 @@ be copied or redistributed.
 
 ### Local decompilation reference
 
-`C:\repos\Mech4MercDecomp` — clone of
-<https://github.com/mech4decomp/Mech4MercDecomp>. It is frozen; do not modify
-it. Use it read-only.
+A local clone of
+<https://github.com/mech4decomp/Mech4MercDecomp> (for example
+`..\Mech4MercDecomp`). It is frozen; do not modify it. Use it read-only.
 
 High-value files:
 
@@ -296,7 +298,7 @@ High-value files:
 2. **Never modify the local `MekTek/` or `mekTekpatchPacks/` directories**
    unless the task explicitly says to test a change. Back up config files
    before writing. Prefer a disposable copy for destructive tests.
-3. **Never modify `C:\repos\Mech4MercDecomp`.** It is a frozen oracle.
+3. **Never modify the local decompilation clone.** It is a frozen oracle.
 4. **Verify before and after.** Use `Test-Mw4Manifest.ps1` and record hashes.
 5. **Prefer config and runtime hooks over static exe patches.** Static patches
    risk AntiHack and multiplayer integrity.
