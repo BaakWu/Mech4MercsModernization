@@ -6,11 +6,20 @@ Status: **development only**. This documents the working windowed launch.
 
 - The patched shortcut launches `MW4Mercs.exe -window` in a **1024x768
   client-area window**, centered on the primary monitor.
+- The process opts out of DPI virtualization before the game creates its
+  window, so one game pixel is one physical pixel at 125%/150% display
+  scaling. This removes the extra scaled border and the mouse drift caused by
+  virtualized cursor coordinates.
 - Starting the raw `MW4Mercs.exe` also works: the proxy relaunches it with
   `-window` before the game initializes. The first process exits immediately
   and the visible game process runs windowed.
 - The monitor stays at the desktop resolution; the game does not switch it to
   800x600 or another mode.
+- The 2002 frontend shell is still laid out for 800x600. The `ddraw.dll` proxy
+  scales that content to fill the 1024x768 window, so there are no black bands
+  on the right and bottom.
+- In-mission rendering is 1024x768 and fills the window. The frontend scaler
+  detects the shell's black border and does not touch mission frames.
 - The game uses its original renderer and assets.
 - The on-disk `MW4Mercs.exe` is not modified.
 - The game's built-in 800x600 display defaults are patched **in memory**.
@@ -42,12 +51,39 @@ windowed path.
 | File | Purpose |
 |---|---|
 | `src/hook/dinput_proxy.cpp` | Forwards the 7 `dinput.dll` exports to `System32\dinput.dll`. |
-| `src/hook/dllmain.cpp` | Loads the hook and starts the worker thread. |
+| `src/hook/dllmain.cpp` | Loads the hook, opts out of DPI virtualization, starts the worker thread. |
 | `src/hook/window.cpp` | Hooks `user32` window calls, forces the client size, centers the window. |
+| `src/hook/ddraw_proxy.cpp` | Forwards `ddraw.dll`, patches the surface vtable, scales the 800x600 frontend into the window. |
 | `src/hook/resolution.cpp` | Patches the game's 800x600 display defaults in memory. |
 | `src/hook/iat.cpp` | Import-address-table patching by resolved function address. |
 | `src/hook/log.cpp` | Config loading and `mw4hook-<pid>.log` output. |
-| `src/hook/build.ps1` | Builds the x86 proxy DLL with Visual Studio 2022. |
+| `src/hook/build.ps1` | Builds the x86 proxy DLLs with Visual Studio 2022. |
+
+### DPI awareness
+
+The game has no DPI-awareness manifest. On a 125% display Windows gives it a
+1024x768 logical client that is 1280x960 physical pixels. DirectDraw draws the
+1024x768 surface into the top-left of that window, which is exactly the black
+right/bottom band in the launch screenshots. The virtualized cursor also no
+longer matches the render surface, which contributes to the in-mission aim
+drift at non-100% scaling.
+
+`dllmain.cpp` calls `SetProcessDpiAwarenessContext(SYSTEM_AWARE)` before the
+game creates its window (with `SetProcessDPIAware` as the fallback). The client
+area becomes a true 1024x768 physical area, the game and cursor share the same
+coordinate space, and the extra scaling disappears.
+
+### Frontend scaling (`ddraw.dll`)
+
+`MW4Mercs.exe` imports `ddraw.dll`; the local proxy loads the system DLL and
+patches the real `IDirectDraw7` and surface vtables. The frontend presents its
+800x600 shell to a 1024x768 surface with `IDirectDrawSurface7::Blt`.
+
+`Hook_Blt` samples the area outside the shell's 800x600 rectangle. When that
+border is mostly black, the frame is the frontend and the hook replaces the
+1:1 `Blt` with a `StretchBlt` of the 800x600 content to the destination. A
+mission fills the surface, fails the border check, and is copied unchanged.
+The behaviour is controlled by `[frontend] stretch=1` in `mw4hook.ini`.
 
 ### Window sizing and centering
 
@@ -84,6 +120,7 @@ Output:
 
 ```text
 artifacts/hook/dinput.dll
+artifacts/hook/ddraw.dll
 artifacts/hook/mw4hook.ini
 ```
 
@@ -126,34 +163,43 @@ pwsh ./tools/Get-Mw4WindowInfo.ps1 -ProcessId <pid>
 Expected:
 
 ```text
-MechWarrior Mercenaries  ...  1024x768  1030x797
+MechWarrior Mercenaries  ...  1024x768  1030x803
 ```
 
 ## Current evidence
 
 - Fresh 3.1c extraction verified against the 32-file core manifest.
-- Local `dinput.dll` proxy loads in `MW4Mercs.exe` (PID matches the log).
-- `MW4Mercs.exe -window -nosound` produces a centered 1024x768 client area.
+- Local `dinput.dll` and `ddraw.dll` proxies load in `MW4Mercs.exe`.
+- `MW4Mercs.exe -window -nosound` produces a centered 1024x768 physical client
+  area on a 125% scaled desktop.
+- The 125% display scaling no longer produces the extra right/bottom band.
+- The main menu and Options screens fill the 1024x768 window without black
+  bands; the menu cursor and hit areas remain aligned with the scaled artwork.
+- In-mission rendering fills the 1024x768 window and is not stretched by the
+  frontend scaler.
+- The Video tab still shows the in-game Screen Resolution control (1024x768).
 - Starting `MW4Mercs.exe -nosound` without `-window` relaunches the process
   with `-window`; the visible process is a centered 1024x768 window.
 - The desktop resolution remains 2048x1152 for the whole run.
-- The game reaches the main menu and remains responsive.
 - No game executable bytes are changed on disk.
 
 ## Known limitations
 
-1. **The frontend still renders at 800x600.** The window is 1024x768, but the
-   2002 shell draws its menu into an 800x600 buffer at the top-left, leaving
-   black/garbage space on the right and bottom.
-2. **In-mission rendering is not yet verified** at 1024x768.
-3. **The in-game resolution menu is not yet retested** with the hook active.
-4. **The relaunch creates a brief second process.** The original process exits
+1. **The frontend scaler is a GDI present.** The shell is still generated at
+   800x600 and upscaled to 1024x768, so the menu art is slightly softer than a
+   native 1024x768 shell. The original 4:3 layout is preserved. The scaler is
+   enabled by `[frontend] stretch=1` and can be turned off for comparison.
+2. **The in-game resolution menu is displayed but not fully retested for a
+   mode change.** It still shows the five original modes and the current
+   1024x768 mode; the hook controls the window size, so changing the menu mode
+   is a later test.
+3. **The relaunch creates a brief second process.** The original process exits
    before the game initializes; the relaunched process is the visible game. The
    patched shortcuts pass `-window` directly and skip this step.
-5. **AntiHack and multiplayer have not been tested.**
-6. **The intro-skip helper is test-only.** It modifies files under
+4. **AntiHack and multiplayer have not been tested.**
+5. **The intro-skip helper is test-only.** It modifies files under
    `Content\Movies` and must be restored before a baseline/hash check.
-7. **Sound is unreliable in the current test environment.** With sound enabled,
+6. **Sound is unreliable in the current test environment.** With sound enabled,
    the game can show a DirectSound `CreateSoundBuffer` error during menu/movie
    playback. `-nosound` is used for display testing.
 

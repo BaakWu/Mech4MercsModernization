@@ -11,6 +11,7 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $patcherSrc = $PSScriptRoot
 $hookBuild = Join-Path $repo 'src\hook\build.ps1'
 $hookDll = Join-Path $repo 'artifacts\hook\dinput.dll'
+$ddrawDll = Join-Path $repo 'artifacts\hook\ddraw.dll'
 $hookIni = Join-Path $repo 'artifacts\hook\mw4hook.ini'
 $manifest = Join-Path $repo 'manifests\mw4-mercs-3.1c-core.sha256'
 $optionsTemplate = Join-Path $repo 'templates\options.ini'
@@ -34,10 +35,21 @@ if (-not (Test-Path -LiteralPath $hookDll -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $hookDll -PathType Leaf)) {
     throw "Hook DLL not found: $hookDll"
 }
+if (-not (Test-Path -LiteralPath $ddrawDll -PathType Leaf)) {
+    Write-Output 'Frontend scaler not built yet; building it first...'
+    & pwsh -NoProfile -File $hookBuild
+    if ($LASTEXITCODE -ne 0) {
+        throw "Hook build failed with exit code $LASTEXITCODE."
+    }
+}
+if (-not (Test-Path -LiteralPath $ddrawDll -PathType Leaf)) {
+    throw "Frontend scaler not found: $ddrawDll"
+}
 
 $payload = Join-Path $OutDir 'patcher\payload'
 New-Item -ItemType Directory -Path $payload -Force | Out-Null
 Copy-Item -LiteralPath $hookDll -Destination (Join-Path $payload 'dinput.dll') -Force
+Copy-Item -LiteralPath $ddrawDll -Destination (Join-Path $payload 'ddraw.dll') -Force
 Copy-Item -LiteralPath $hookIni -Destination (Join-Path $payload 'mw4hook.ini') -Force
 Copy-Item -LiteralPath $manifest -Destination (Join-Path $payload 'core.sha256') -Force
 Copy-Item -LiteralPath $optionsTemplate -Destination (Join-Path $payload 'options.ini') -Force
@@ -50,6 +62,7 @@ $rcPath = Join-Path $OutDir 'patcher\resources.rc'
 $rc = @(
     '#include "resource.h"',
     ('IDR_HOOK_DLL RCDATA "{0}"' -f (To-RcPath (Join-Path $payload 'dinput.dll'))),
+    ('IDR_DDRAW_DLL RCDATA "{0}"' -f (To-RcPath (Join-Path $payload 'ddraw.dll'))),
     ('IDR_HOOK_INI RCDATA "{0}"' -f (To-RcPath (Join-Path $payload 'mw4hook.ini'))),
     ('IDR_CORE_MANIFEST RCDATA "{0}"' -f (To-RcPath (Join-Path $payload 'core.sha256'))),
     ('IDR_OPTIONS_TEMPLATE RCDATA "{0}"' -f (To-RcPath (Join-Path $payload 'options.ini')))

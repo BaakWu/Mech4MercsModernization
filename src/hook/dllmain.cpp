@@ -7,6 +7,45 @@
 
 namespace {
 
+// Opt out of DPI virtualization before the game creates its window.
+//
+// On a display scaled above 100%, an unaware process gets a 1024x768 logical
+// client area that is really 1280x960 physical pixels at 125%. DirectDraw then
+// draws a 1024x768 surface into the top-left of the larger window, leaving
+// black bands on the right and bottom, and the virtualized mouse coordinates
+// no longer match the game's render surface. System DPI awareness makes one
+// game pixel one physical pixel on the primary monitor.
+void EnableDpiAwareness() {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) {
+        return;
+    }
+
+    // DPI_AWARENESS_CONTEXT_SYSTEM_AWARE, defined locally so the hook does not
+    // depend on a recent SDK.
+    using SetProcessDpiAwarenessContext_t = BOOL(WINAPI*)(HANDLE);
+    auto set_context = reinterpret_cast<SetProcessDpiAwarenessContext_t>(
+        GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
+    if (set_context) {
+        HANDLE system_aware = reinterpret_cast<HANDLE>(-2);
+        if (set_context(system_aware)) {
+            mw4hook::Log("dpi: system aware\n");
+            return;
+        }
+        mw4hook::Log("dpi: SetProcessDpiAwarenessContext failed (%lu)\n",
+                     GetLastError());
+    }
+
+    using SetProcessDPIAware_t = BOOL(WINAPI*)();
+    auto set_aware = reinterpret_cast<SetProcessDPIAware_t>(
+        GetProcAddress(user32, "SetProcessDPIAware"));
+    if (set_aware && set_aware()) {
+        mw4hook::Log("dpi: SetProcessDPIAware\n");
+        return;
+    }
+    mw4hook::Log("dpi: awareness not set (%lu)\n", GetLastError());
+}
+
 DWORD WINAPI HookThread(LPVOID) {
     Sleep(100);
     for (int i = 0; i < 300; ++i) {
@@ -46,6 +85,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         DisableThreadLibraryCalls(instance);
         mw4hook::LogInit(instance);
         mw4hook::Log("dllmain: process attach\n");
+        EnableDpiAwareness();
         mw4hook::ResolveDinputExports();
         mw4hook::RelaunchWindowed();
         mw4hook::Log("dllmain: attach complete\n");

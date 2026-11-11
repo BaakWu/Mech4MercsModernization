@@ -420,6 +420,17 @@ High-value files:
   the `GetLocationFromAddress` assert.
 - The game's built-in 800x600 display defaults and windowed-mode pushes are
   patched in memory; `MW4Mercs.exe` is unchanged on disk.
+- The process opts out of DPI virtualization before creating its window. At
+  125% display scaling the client is a true 1024x768 physical area; the extra
+  scaled band is gone. This also removes the virtualized cursor mismatch that
+  contributed to the Windows-scaling torso drift.
+- The 2002 frontend shell still generates 800x600, but the `ddraw.dll` proxy
+  scales it to the 1024x768 window and skips in-mission frames. The main menu,
+  Roster, and Options screens fill the window; menu cursor and hit areas remain
+  aligned with the scaled artwork.
+- In-mission rendering at 1024x768 is verified to fill the window.
+- The in-game Options > Video tab is verified to show the Screen Resolution
+  control at 1024x768.
 - The hook reaches the main menu and remains responsive. Test-only intro-skip
   and window-inspection helpers were added.
 - The process window/display path is documented in `docs/HOOK.md`.
@@ -427,7 +438,8 @@ High-value files:
   - verifies `MW4Mercs.exe` and the 32-file core manifest,
   - backs up `options.ini`, conflicting hook files, and the existing shortcut,
   - patches the display keys to 1024x768/32-bit,
-  - installs the embedded `dinput.dll` and `mw4hook.ini`,
+  - installs the embedded `dinput.dll`, `ddraw.dll`, and `mw4hook.ini`,
+  - installs and backs up `ddraw.dll` as part of the same rollback record,
   - creates a windowed shortcut and updates the existing game shortcut,
   - writes `mw4patch-install.ini` with installed hashes and backup names,
   - supports `uninstall`/rollback and `verify`/`info` commands.
@@ -435,14 +447,11 @@ High-value files:
 
 ### Open
 
-- Fix the frontend rendering size: the 2002 shell still draws into an 800x600
-  buffer inside the 1024x768 window (black/garbage border).
-- Verify in-mission rendering at 1024x768.
-- Retest the in-game Options > Resolution menu with the hook active.
-- Test AntiHack and multiplayer integrity with the `dinput.dll` proxy present.
+- Test AntiHack and multiplayer integrity with the `dinput.dll` and `ddraw.dll`
+  proxies present.
 - Map the retail oracle functions to the 3.1c binary with pattern scanning.
 - Find the exact 3.1c mouse aim/dead-zone code and the leg-turn mouse lock.
-- Determine what causes the Windows-scaling torso drift.
+- Verify the Windows-scaling torso drift fix with real mouse aim.
 - Identify the menu first-click delay and second-click loss.
 - Identify the main-monitor/black-screen behavior.
 - Identify the second-video-card mipmap bug.

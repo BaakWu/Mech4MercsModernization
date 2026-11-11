@@ -5,8 +5,8 @@ param(
     [switch]$Uninstall
 )
 
-# Development helper: copy the built ddraw proxy and its ini into a test
-# install, or remove them again. The final release will do this from the
+# Development helper: copy the built dinput/ddraw proxies and their ini into a
+# test install, or remove them again. The final release will do this from the
 # patcher executable.
 $ErrorActionPreference = 'Stop'
 
@@ -28,7 +28,7 @@ function Backup-File([string]$name) {
 }
 
 if ($Uninstall) {
-    foreach ($name in 'ddraw.dll', 'mw4hook.ini') {
+    foreach ($name in 'dinput.dll', 'ddraw.dll', 'mw4hook.ini') {
         $target = Join-Path $installPath $name
         if (Test-Path -LiteralPath $target -PathType Leaf) {
             if ($PSCmdlet.ShouldProcess($target, 'Remove hook file')) {
@@ -49,20 +49,26 @@ if ($Uninstall) {
     return
 }
 
-$dll = Join-Path $HookDir 'ddraw.dll'
+$dinput = Join-Path $HookDir 'dinput.dll'
+$ddraw = Join-Path $HookDir 'ddraw.dll'
 $ini = Join-Path $HookDir 'mw4hook.ini'
-if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
-    throw "Hook DLL not found: $dll. Run src/hook/build.ps1 first."
+if (-not (Test-Path -LiteralPath $dinput -PathType Leaf)) {
+    throw "Hook DLL not found: $dinput. Run src/hook/build.ps1 first."
+}
+if (-not (Test-Path -LiteralPath $ddraw -PathType Leaf)) {
+    throw "Frontend scaler not found: $ddraw. Run src/hook/build.ps1 first."
 }
 if (-not (Test-Path -LiteralPath $ini -PathType Leaf)) {
     throw "Hook config not found: $ini"
 }
 
+Backup-File 'dinput.dll'
 Backup-File 'ddraw.dll'
 Backup-File 'mw4hook.ini'
 
 if ($PSCmdlet.ShouldProcess($installPath, 'Install mw4hook')) {
-    Copy-Item -LiteralPath $dll -Destination (Join-Path $installPath 'ddraw.dll') -Force
+    Copy-Item -LiteralPath $dinput -Destination (Join-Path $installPath 'dinput.dll') -Force
+    Copy-Item -LiteralPath $ddraw -Destination (Join-Path $installPath 'ddraw.dll') -Force
     Copy-Item -LiteralPath $ini -Destination (Join-Path $installPath 'mw4hook.ini') -Force
 }
 

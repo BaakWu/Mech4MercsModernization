@@ -35,9 +35,9 @@ void WriteDword(unsigned char* target, int value) {
     }
 }
 
-bool PatchWindowedModePushes(const Config& config, unsigned char* start,
-                             size_t size) {
-    bool patched = false;
+int PatchWindowedModePushes(const Config& config, unsigned char* start,
+                            size_t size) {
+    int patched = 0;
     __try {
         for (size_t offset = 0; offset + 11 < size; ++offset) {
             unsigned char* p = start + offset;
@@ -52,9 +52,10 @@ bool PatchWindowedModePushes(const Config& config, unsigned char* start,
             if (p[10] != 0xE8) {
                 continue;
             }
+            Log("resolution: windowed push pair at %p\n", p);
             WriteDword(p + 1, config.resolution_height);
             WriteDword(p + 6, config.resolution_width);
-            patched = true;
+            ++patched;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return patched;
@@ -92,12 +93,20 @@ bool PatchStorePairs(const Config& config, unsigned char* start, size_t size,
                     static_cast<uintptr_t>(*reinterpret_cast<DWORD*>(p + 2)));
                 auto* height_global = reinterpret_cast<unsigned char*>(
                     static_cast<uintptr_t>(*reinterpret_cast<DWORD*>(q + 2)));
+                Log("resolution: store pair at %p globals %p/%p\n", p,
+                    width_global, height_global);
                 __try {
+                    Log("resolution: global values before %lu/%lu\n",
+                        *reinterpret_cast<DWORD*>(width_global),
+                        *reinterpret_cast<DWORD*>(height_global));
                     if (*reinterpret_cast<DWORD*>(width_global) == 800 &&
                         *reinterpret_cast<DWORD*>(height_global) == 600) {
                         WriteDword(height_global, config.resolution_height);
                         WriteDword(width_global, config.resolution_width);
                     }
+                    Log("resolution: global values after %lu/%lu\n",
+                        *reinterpret_cast<DWORD*>(width_global),
+                        *reinterpret_cast<DWORD*>(height_global));
                 } __except (EXCEPTION_EXECUTE_HANDLER) {
                 }
                 break;
@@ -145,10 +154,10 @@ void ApplyResolutionDefaults() {
         unsigned char* start = base + section->VirtualAddress;
         int candidates = 0;
         bool stores = PatchStorePairs(config, start, size, &candidates);
-        bool pushes = PatchWindowedModePushes(config, start, size);
+        int pushes = PatchWindowedModePushes(config, start, size);
         if (stores || pushes) {
-            Log("resolution: patched %s (%d store pair(s), pushes=%d)\n",
-                section->Name, candidates, pushes ? 1 : 0);
+            Log("resolution: patched %s (%d store pair(s), %d push pair(s))\n",
+                section->Name, candidates, pushes);
         }
     }
 }

@@ -4,7 +4,8 @@
 //   1. verifies the supported 3.1c build against the core manifest,
 //   2. backs up options.ini and any conflicting hook files,
 //   3. patches the display configuration,
-//   4. extracts the embedded dinput.dll hook and mw4hook.ini,
+//   4. extracts the embedded dinput.dll hook, ddraw.dll frontend scaler, and
+//      mw4hook.ini,
 //   5. creates a windowed shortcut,
 //   6. writes an install record, and supports uninstall/rollback.
 //
@@ -38,6 +39,8 @@ constexpr const wchar_t* kOptionsName = L"options.ini";
 constexpr const wchar_t* kOptionsBackup = L"options.ini.mw4patch-backup";
 constexpr const wchar_t* kHookName = L"dinput.dll";
 constexpr const wchar_t* kHookBackup = L"dinput.dll.mw4patch-backup";
+constexpr const wchar_t* kDdrawName = L"ddraw.dll";
+constexpr const wchar_t* kDdrawBackup = L"ddraw.dll.mw4patch-backup";
 constexpr const wchar_t* kIniName = L"mw4hook.ini";
 constexpr const wchar_t* kIniBackup = L"mw4hook.ini.mw4patch-backup";
 constexpr const wchar_t* kShortcutName =
@@ -663,12 +666,14 @@ bool IsGameRunning() {
 struct RollbackState {
     bool optionsPatched = false;
     bool dinputWritten = false;
+    bool ddrawWritten = false;
     bool iniWritten = false;
     bool shortcutWritten = false;
     bool existingShortcutWritten = false;
     bool recordWritten = false;
     bool optionsBackup = false;
     bool dinputBackup = false;
+    bool ddrawBackup = false;
     bool iniBackup = false;
     bool existingShortcutBackup = false;
 };
@@ -694,6 +699,15 @@ void Rollback(const std::wstring& install, const RollbackState& state) {
         const std::wstring target = Join(install, kHookName);
         const std::wstring backup = Join(install, kHookBackup);
         if (state.dinputBackup && FileExists(backup)) {
+            CopyFileTo(backup, target);
+        } else {
+            DeleteFileW(target.c_str());
+        }
+    }
+    if (state.ddrawWritten) {
+        const std::wstring target = Join(install, kDdrawName);
+        const std::wstring backup = Join(install, kDdrawBackup);
+        if (state.ddrawBackup && FileExists(backup)) {
             CopyFileTo(backup, target);
         } else {
             DeleteFileW(target.c_str());
@@ -767,16 +781,20 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
     }
 
     std::vector<BYTE> dinput;
+    std::vector<BYTE> ddraw;
     std::vector<BYTE> ini;
     std::vector<BYTE> optionsTemplate;
     if (!LoadResourceBytes(IDR_HOOK_DLL, dinput) ||
+        !LoadResourceBytes(IDR_DDRAW_DLL, ddraw) ||
         !LoadResourceBytes(IDR_HOOK_INI, ini)) {
         PrintError(L"error: embedded hook payload is missing\n");
         return 1;
     }
     std::string dinputHash;
+    std::string ddrawHash;
     std::string iniHash;
     if (!Sha256Bytes(dinput.data(), dinput.size(), dinputHash) ||
+        !Sha256Bytes(ddraw.data(), ddraw.size(), ddrawHash) ||
         !Sha256Bytes(ini.data(), ini.size(), iniHash)) {
         PrintError(L"error: could not hash the embedded payload\n");
         return 1;
@@ -784,23 +802,33 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
 
     const std::wstring optionsPath = Join(install, kOptionsName);
     const std::wstring dinputPath = Join(install, kHookName);
+    const std::wstring ddrawPath = Join(install, kDdrawName);
     const std::wstring iniPath = Join(install, kIniName);
     const std::wstring optionsBackup = Join(install, kOptionsBackup);
     const std::wstring dinputBackup = Join(install, kHookBackup);
+    const std::wstring ddrawBackup = Join(install, kDdrawBackup);
     const std::wstring iniBackup = Join(install, kIniBackup);
     const std::wstring recordPath = Join(install, kRecordName);
 
     bool existingDinput = FileExists(dinputPath);
+    bool existingDdraw = FileExists(ddrawPath);
     bool existingIni = FileExists(iniPath);
     bool existingOptions = FileExists(optionsPath);
     bool backupOptions = existingOptions && !FileExists(optionsBackup);
     bool backupDinput = existingDinput && !FileExists(dinputBackup);
+    bool backupDdraw = existingDdraw && !FileExists(ddrawBackup);
     bool backupIni = existingIni && !FileExists(iniBackup);
 
     if (existingDinput && backupDinput) {
         std::string existingHash;
         if (Sha256File(dinputPath, existingHash) && existingHash == dinputHash) {
             backupDinput = false;  // re-install over our own hook
+        }
+    }
+    if (existingDdraw && backupDdraw) {
+        std::string existingHash;
+        if (Sha256File(ddrawPath, existingHash) && existingHash == ddrawHash) {
+            backupDdraw = false;
         }
     }
     if (existingIni && backupIni) {
@@ -814,15 +842,24 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
     Print(L"  - %ls display keys -> 1024x768, 32-bit\n",
           existingOptions ? L"patch" : L"create");
     Print(L"  - install %ls (%hs)\n", kHookName, dinputHash.c_str());
+    Print(L"  - install %ls (%hs)\n", kDdrawName, ddrawHash.c_str());
     Print(L"  - install %ls\n", kIniName);
     Print(L"  - create %ls\n", kShortcutName);
-    if (backupOptions || backupDinput || backupIni) {
-        Print(L"  - backups: %ls%ls%ls\n",
-              backupOptions ? kOptionsBackup : L"",
-              backupDinput ? L" " : L"", backupDinput ? kHookBackup : L"");
-        if (backupIni) {
-            Print(L"             %ls\n", kIniBackup);
+    if (backupOptions || backupDinput || backupDdraw || backupIni) {
+        Print(L"  - backups:");
+        if (backupOptions) {
+            Print(L" %ls", kOptionsBackup);
         }
+        if (backupDinput) {
+            Print(L" %ls", kHookBackup);
+        }
+        if (backupDdraw) {
+            Print(L" %ls", kDdrawBackup);
+        }
+        if (backupIni) {
+            Print(L" %ls", kIniBackup);
+        }
+        Print(L"\n");
     }
     Print(L"\n");
 
@@ -834,6 +871,7 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
     RollbackState state;
     state.optionsBackup = backupOptions;
     state.dinputBackup = backupDinput;
+    state.ddrawBackup = backupDdraw;
     state.iniBackup = backupIni;
 
     if (backupOptions && !CopyFileTo(optionsPath, optionsBackup)) {
@@ -842,6 +880,10 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
     }
     if (backupDinput && !CopyFileTo(dinputPath, dinputBackup)) {
         PrintError(L"error: could not back up dinput.dll\n");
+        return 1;
+    }
+    if (backupDdraw && !CopyFileTo(ddrawPath, ddrawBackup)) {
+        PrintError(L"error: could not back up ddraw.dll\n");
         return 1;
     }
     if (backupIni && !CopyFileTo(iniPath, iniBackup)) {
@@ -867,6 +909,17 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
         return 1;
     }
     state.dinputWritten = true;
+
+    const std::wstring ddrawTemp = ddrawPath + L".mw4patch-new";
+    if (!WriteFileAll(ddrawTemp, ddraw.data(), ddraw.size()) ||
+        !MoveFileExW(ddrawTemp.c_str(), ddrawPath.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(ddrawTemp.c_str());
+        PrintError(L"error: could not install ddraw.dll\n");
+        Rollback(install, state);
+        return 1;
+    }
+    state.ddrawWritten = true;
 
     const std::wstring iniTemp = iniPath + L".mw4patch-new";
     if (!WriteFileAll(iniTemp, ini.data(), ini.size()) ||
@@ -919,6 +972,7 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
     record["install_path"] = WideToUtf8(install);
     record["target_sha256"] = kExpectedExeSha256;
     record["file.dinput.dll"] = dinputHash;
+    record["file.ddraw.dll"] = ddrawHash;
     record["file.mw4hook.ini"] = iniHash;
     if (state.shortcutWritten) {
         record["file.shortcut"] = WideToUtf8(kShortcutName);
@@ -931,6 +985,9 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
     }
     if (backupDinput) {
         record["backup.dinput.dll"] = WideToUtf8(kHookBackup);
+    }
+    if (backupDdraw) {
+        record["backup.ddraw.dll"] = WideToUtf8(kDdrawBackup);
     }
     if (backupIni) {
         record["backup.mw4hook.ini"] = WideToUtf8(kIniBackup);
@@ -948,6 +1005,7 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
 
     Print(L"\nInstalled:\n");
     Print(L"  dinput.dll   %hs\n", dinputHash.c_str());
+    Print(L"  ddraw.dll    %hs\n", ddrawHash.c_str());
     Print(L"  mw4hook.ini %hs\n", iniHash.c_str());
     Print(L"  record      %ls\n", recordPath.c_str());
     Print(L"\nLaunch with the new shortcut, or:\n  MW4Mercs.exe -window\n");
@@ -969,9 +1027,11 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
 
     const std::wstring recordPath = Join(install, kRecordName);
     const std::wstring dinputPath = Join(install, kHookName);
+    const std::wstring ddrawPath = Join(install, kDdrawName);
     const std::wstring iniPath = Join(install, kIniName);
     const std::wstring optionsPath = Join(install, kOptionsName);
     const std::wstring dinputBackup = Join(install, kHookBackup);
+    const std::wstring ddrawBackup = Join(install, kDdrawBackup);
     const std::wstring iniBackup = Join(install, kIniBackup);
     const std::wstring optionsBackup = Join(install, kOptionsBackup);
     const std::wstring shortcutPath = Join(install, kShortcutName);
@@ -983,11 +1043,16 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
     }
 
     std::string embeddedDinputHash;
+    std::string embeddedDdrawHash;
     std::string embeddedIniHash;
     std::vector<BYTE> dinput;
+    std::vector<BYTE> ddraw;
     std::vector<BYTE> ini;
     if (LoadResourceBytes(IDR_HOOK_DLL, dinput)) {
         Sha256Bytes(dinput.data(), dinput.size(), embeddedDinputHash);
+    }
+    if (LoadResourceBytes(IDR_DDRAW_DLL, ddraw)) {
+        Sha256Bytes(ddraw.data(), ddraw.size(), embeddedDdrawHash);
     }
     if (LoadResourceBytes(IDR_HOOK_INI, ini)) {
         Sha256Bytes(ini.data(), ini.size(), embeddedIniHash);
@@ -1020,6 +1085,14 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
     if (recordDinputHash.empty()) {
         recordDinputHash = embeddedDinputHash;
     }
+    std::string recordDdrawHash;
+    it = record.find("file.ddraw.dll");
+    if (it != record.end()) {
+        recordDdrawHash = it->second;
+    }
+    if (recordDdrawHash.empty()) {
+        recordDdrawHash = embeddedDdrawHash;
+    }
     std::string recordIniHash;
     it = record.find("file.mw4hook.ini");
     if (it != record.end()) {
@@ -1031,6 +1104,7 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
 
     Print(L"Plan:\n");
     Print(L"  - remove %ls (if it matches our hook)\n", kHookName);
+    Print(L"  - remove %ls (if it matches our hook)\n", kDdrawName);
     Print(L"  - remove %ls\n", kIniName);
     Print(L"  - remove %ls\n", kShortcutName);
     Print(L"  - restore backups\n\n");
@@ -1040,6 +1114,7 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
     }
 
     removeIfMatches(dinputPath, recordDinputHash);
+    removeIfMatches(ddrawPath, recordDdrawHash);
     removeIfMatches(iniPath, recordIniHash);
 
     if (FileExists(shortcutPath)) {
@@ -1063,6 +1138,17 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
         } else {
             PrintError(L"warning: left %ls in place; backup kept as %ls\n",
                        dinputPath.c_str(), dinputBackup.c_str());
+        }
+    }
+    if (FileExists(ddrawBackup)) {
+        if (!FileExists(ddrawPath) || removeIfMatches(ddrawPath, recordDdrawHash)) {
+            if (MoveFileExW(ddrawBackup.c_str(), ddrawPath.c_str(),
+                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                Print(L"Restored previous ddraw.dll\n");
+            }
+        } else {
+            PrintError(L"warning: left %ls in place; backup kept as %ls\n",
+                       ddrawPath.c_str(), ddrawBackup.c_str());
         }
     }
     if (FileExists(iniBackup)) {
@@ -1108,11 +1194,17 @@ int CommandVerify(const std::wstring& install) {
     VerifyResult verify = VerifyCoreFiles(install, false);
 
     const std::wstring dinputPath = Join(install, kHookName);
+    const std::wstring ddrawPath = Join(install, kDdrawName);
     const std::wstring recordPath = Join(install, kRecordName);
     std::string embeddedHash;
+    std::string embeddedDdrawHash;
     std::vector<BYTE> dinput;
+    std::vector<BYTE> ddraw;
     if (LoadResourceBytes(IDR_HOOK_DLL, dinput)) {
         Sha256Bytes(dinput.data(), dinput.size(), embeddedHash);
+    }
+    if (LoadResourceBytes(IDR_DDRAW_DLL, ddraw)) {
+        Sha256Bytes(ddraw.data(), ddraw.size(), embeddedDdrawHash);
     }
     if (FileExists(dinputPath)) {
         std::string actual;
@@ -1123,6 +1215,16 @@ int CommandVerify(const std::wstring& install) {
         }
     } else {
         Print(L"dinput.dll hook: not installed\n");
+    }
+    if (FileExists(ddrawPath)) {
+        std::string actual;
+        if (Sha256File(ddrawPath, actual)) {
+            Print(L"ddraw.dll frontend scaler: %ls\n",
+                  actual == embeddedDdrawHash ? L"installed (matches)"
+                                              : L"present (unknown hash)");
+        }
+    } else {
+        Print(L"ddraw.dll frontend scaler: not installed\n");
     }
     Print(L"Install record: %ls\n",
           FileExists(recordPath) ? L"present" : L"absent");

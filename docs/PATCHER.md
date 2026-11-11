@@ -8,6 +8,7 @@ testing the windowed 1024x768 fix. It is not a signed public release.
 `mw4patch.exe` embeds:
 
 - the `dinput.dll` runtime hook,
+- the `ddraw.dll` frontend scaler,
 - `mw4hook.ini`,
 - the 32-file 3.1c core manifest,
 - the known-good `options.ini` template.
@@ -17,10 +18,10 @@ On install it:
 1. verifies `MW4Mercs.exe` against the supported 3.1c SHA-256,
 2. verifies all 32 core files against the embedded manifest,
 3. refuses to run while `MW4Mercs.exe` is running,
-4. backs up `options.ini`, any conflicting `dinput.dll` / `mw4hook.ini`, and
-   the existing game shortcut,
+4. backs up `options.ini`, any conflicting `dinput.dll` / `ddraw.dll` /
+   `mw4hook.ini`, and the existing game shortcut,
 5. patches the `[graphics options]` display keys to 1024x768, 32-bit,
-6. extracts `dinput.dll` and `mw4hook.ini`,
+6. extracts `dinput.dll`, `ddraw.dll`, and `mw4hook.ini`,
 7. creates `MechWarrior 4 Mercenaries (Windowed).lnk` and updates the existing
    `Shortcut to MW4Mercs.exe.lnk` to use `-window`,
 8. writes `mw4patch-install.ini` with installed hashes and backup names.
@@ -68,6 +69,7 @@ Default backup names:
 ```text
 options.ini.mw4patch-backup
 dinput.dll.mw4patch-backup
+ddraw.dll.mw4patch-backup
 mw4hook.ini.mw4patch-backup
 Shortcut to MW4Mercs.exe.lnk.mw4patch-backup
 ```
@@ -76,14 +78,13 @@ Shortcut to MW4Mercs.exe.lnk.mw4patch-backup
 installed file hashes, shortcut names, and backup names. Uninstall uses it to
 remove only files that match the recorded hooks and to restore the backups.
 
-If the recorded `dinput.dll` hash does not match the file on disk, uninstall
-leaves that file alone and keeps the backup rather than overwriting user
-changes.
+If a recorded hook hash does not match the file on disk, uninstall leaves that
+file alone and keeps the backup rather than overwriting user changes.
 
 ## Build
 
 ```powershell
-pwsh ./src/hook/build.ps1      # builds the embedded dinput.dll and config
+pwsh ./src/hook/build.ps1      # builds dinput.dll, ddraw.dll, and the config
 pwsh ./src/patcher/build.ps1   # builds artifacts/mw4patch.exe and publishes dist/mw4patch.exe
 ```
 
@@ -93,7 +94,8 @@ and links a single console executable (`/MT`, no VC++ redistributable). Use
 
 ## Current limitations
 
-- The frontend still renders at 800x600 inside the 1024x768 window.
+- The frontend is still generated at 800x600 and upscaled by the `ddraw.dll`
+  proxy; the layout is preserved but the menu art is slightly softer.
 - The patcher installs the development hook, not a final release payload.
 - The install record is a simple key/value file, not a signed manifest.
 - The patcher does not install or remove the test-only intro skip. That helper

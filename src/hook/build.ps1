@@ -70,6 +70,33 @@ if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
     throw "Build did not produce $dll"
 }
 
+# ddraw proxy (frontend stretch)
+$ddrawSources = @('ddraw_proxy.cpp') | ForEach-Object { Join-Path $src $_ }
+$ddrawDef = Join-Path $src 'ddraw.def'
+$ddrawObjDir = Join-Path $OutDir 'obj-ddraw'
+New-Item -ItemType Directory -Path $ddrawObjDir -Force | Out-Null
+$ddrawCompile = @(
+    'cl /nologo /LD /W4 /WX- /EHsc /GR- /GS- /Gy /utf-8 /DUNICODE /D_UNICODE'
+    $optFlags
+    "/Fo:`"$ddrawObjDir\\`""
+    "/Fd:`"$ddrawObjDir\ddraw.pdb`""
+    ($ddrawSources -join ' ')
+    "/Fe:`"$OutDir\ddraw.dll`""
+    '/link /MACHINE:X86'
+    "/DEF:`"$ddrawDef`""
+    'user32.lib gdi32.lib /SUBSYSTEM:WINDOWS /RELEASE'
+) -join ' '
+$ddrawCommand = "call `"$vcvars`" x86 >nul && $ddrawCompile"
+$ddrawOut = cmd /c $ddrawCommand 2>&1
+$ddrawOut | ForEach-Object { Write-Output $_ }
+if ($LASTEXITCODE -ne 0) {
+    throw "ddraw proxy build failed with exit code $LASTEXITCODE."
+}
+$ddrawDll = Join-Path $OutDir 'ddraw.dll'
+if (-not (Test-Path -LiteralPath $ddrawDll -PathType Leaf)) {
+    throw "Build did not produce $ddrawDll"
+}
+
 $iniSource = Join-Path $src 'mw4hook.ini'
 $iniTarget = Join-Path $OutDir 'mw4hook.ini'
 if (-not (Test-Path -LiteralPath $iniSource -PathType Leaf)) {
@@ -80,4 +107,6 @@ Copy-Item -LiteralPath $iniSource -Destination $iniTarget -Force
 Write-Output ''
 Write-Output "Built: $dll"
 Write-Output ("SHA-256: " + (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant())
+Write-Output "Built: $ddrawDll"
+Write-Output ("SHA-256: " + (Get-FileHash -LiteralPath $ddrawDll -Algorithm SHA256).Hash.ToLowerInvariant())
 Write-Output "Config: $iniTarget"
