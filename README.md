@@ -36,6 +36,45 @@ getting the game running properly:
 The first release does **not** replace the renderer, reimplement the engine, or
 change the single-player campaign.
 
+### Fix reference, not a renderer replacement
+
+The compatibility fixes in this project are based on the behavior documented by
+the **DX11 Renderer Overhaul** mod:
+
+<https://www.moddb.com/mods/mw4-mercenaries-dx11-renderer-overhaul>
+
+That project is a **behavior reference for its fixes only**. We are not
+adopting its renderer or any of its visual changes.
+
+The game must continue to look like the original 2002 release:
+
+- original DirectX 7 rendering path
+- original textures, models, lighting, water, terrain, skies, effects, and HUD
+- original 4:3 display modes
+- no HDR, TAA, baked GI, new shadows, new water, terrain or texture replacement,
+  grass/clutter, model replacement, widescreen/FOV changes, or HUD restyling
+- no 64-channel audio change
+
+The only display change in the first release is compatibility-oriented:
+windowed 1024x768 plus a working in-game resolution menu. That is not a visual
+overhaul.
+
+| Fix demonstrated by the reference mod | Adopted? |
+|---|---|
+| Mouse aiming dead-zone fix | **Yes** |
+| Mouse no longer sticks while the legs follow the torso | **Yes** |
+| Torso drift with Windows display scaling above 100% | **Yes** |
+| Menu buttons accept the first click; quick second click is not lost | **Yes** |
+| Start on the main monitor without a black screen until clicked | **Yes** |
+| Texture mipmap garbage when a second video card is configured | **Yes** |
+| Crashes from the outdated `imagehlp.dll` path | **Yes** |
+| Menu message-dispatch crash | **Yes** |
+| Failed mode switch leaving the game in 16-bit color | **Yes** |
+| AntiHack left active and untouched | **Yes** |
+| DX11 renderer, HDR, TAA, shadows, water, terrain, textures, sky, models | **No** |
+| Widescreen/ultrawide/FOV/HUD changes | **No** |
+| 64-channel audio change | **No** |
+
 ## Planned user experience
 
 The release will be a single **`mw4patch.exe`**:

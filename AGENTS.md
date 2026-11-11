@@ -100,6 +100,29 @@ extraction was verified against the 32-file core manifest with 32/32 matches.
     every successful mode must be 32-bit.
 12. **MekTek AntiHack must remain active and untouched.**
 
+These are **compatibility and behavior fixes only**. The game must continue to
+look like the original 2002 release. The DX11 Renderer Overhaul is a behavior
+reference for these fixes, not a rendering target.
+
+#### Visual fidelity (non-negotiable)
+
+Do **not** adopt the DX11 Renderer Overhaul's rendering pipeline or visual
+changes. In particular, do not add or replace:
+
+- the DirectX 7 renderer with DX11, Vulkan, or another rendering backend
+- deferred/HDR rendering, tonemapping, bloom, TAA, HBAO, or baked GI
+- cascaded shadows, cloud shadows, new searchlight/volumetric effects
+- new water, waves, foam, reflections, or caustics
+- terrain meshes, terrain textures, grass, rocks, clutter, or sky replacements
+- texture, model, material, decal, or particle replacements
+- menu fonts, HUD styling, MechLab supersampling, or anisotropic filtering
+- widescreen/ultrawide/FOV/HUD layout changes
+- 64-channel audio changes
+
+The windowed 1024x768 mode and working in-game resolution menu are
+compatibility requirements, not a visual overhaul. Keep the original 4:3
+presentation and original assets.
+
 ### 3.2 Backlog (not first release)
 
 13. **WASD movement with throttle decay, similar to MechWarrior 5:**
@@ -287,7 +310,9 @@ High-value files:
   and mapping retail behavior onto the 3.1c binary.
 - **DX11 Renderer Overhaul** —
   <https://www.moddb.com/mods/mw4-mercenaries-dx11-renderer-overhaul> —
-  behavior reference for the fixes list, not source.
+  behavior reference for the compatibility/input/UI fixes only. Not a
+  rendering target, not source, and not a reason to change the game's original
+  visual presentation.
 - **MekTek Rebirth** — <https://mektek.net/rebirth> — closed project. Do not
   depend on it. Public Phase 2 status is unverified; see `docs/REBIRTH.md`.
 

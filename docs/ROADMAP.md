@@ -68,6 +68,11 @@ This is research work. It is not required for the canonical 3.1c base.
 
 - Reimplementing the engine.
 - Replacing Rebirth.
+- Replacing or modernizing the renderer. The game must retain its original
+  DirectX 7 look, original assets, original 4:3 presentation, and original HUD.
+- Adopting the DX11 Renderer Overhaul's visual pipeline: HDR, TAA, baked GI,
+  new shadows, water, terrain, textures, grass, sky, models, fonts, or effects.
+- Widescreen/ultrawide/FOV/HUD redesigns or 64-channel audio changes.
 - Shipping game files.
 - Distributing modified executables without an auditable patch record.
 - Reviving the dead MekTek online services.
