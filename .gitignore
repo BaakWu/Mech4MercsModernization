@@ -6,6 +6,9 @@
 /MekTek/
 /mekTekpatchPacks/
 
+# Pristine distribution archive. Read-only test input; never modify or commit.
+/MekTek.rar
+
 # Legacy patch/archive formats if they are moved back to the repo root.
 *.mtx
 *.rar

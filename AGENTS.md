@@ -38,13 +38,42 @@ The local baseline copy and legacy patch media are intentionally excluded from
 Git. They are local test inputs only:
 
 ```text
-MekTek/                 local 3.1c game distribution (gitignored)
+MekTek.rar              pristine distribution archive (gitignored, immutable)
+MekTek/                 extracted local 3.1c game distribution (gitignored)
 mekTekpatchPacks/       legacy MTX patches/hotfixes (gitignored)
 ```
 
-Do not commit either directory. Do not use the legacy MTX client as the normal
+Do not commit any of these. Do not use the legacy MTX client as the normal
 install path. Do not apply the old incremental patches or `0030a/b/c` hotfixes
 to the verified 3.1c baseline.
+
+### 2.1 Pristine test source
+
+`MekTek.rar` is the canonical, immutable test source. It contains the publicly
+available MechWarrior 4: Mercenaries distribution at the supported 3.1c patch
+version.
+
+- SHA-256:
+  `8c8a2c192834a597862cce19e4215d563f93de46872eff8fd1980d47bb417a34`
+- Size: 1,820,457,699 bytes
+- It is gitignored and must never be committed.
+- **Do not modify, rename, repack, delete, or overwrite `MekTek.rar`.**
+- The only permitted operation on it is **reading/extracting** it to create a
+  fresh test install.
+- Never extract over an existing install. Delete the extracted `MekTek/`
+  directory first, then extract again.
+- Verify the archive hash before and after extraction.
+- Verify the extracted install with the core manifest before running tests.
+
+Use the reset helper for every destructive or binary-patch test:
+
+```powershell
+pwsh ./tools/Reset-Mw4TestInstall.ps1 -Force
+```
+
+This deletes the extracted `MekTek/` folder, re-extracts it from `MekTek.rar`,
+and verifies the core hash manifest. It never writes to the RAR. A clean
+extraction was verified against the 32-file core manifest with 32/32 matches.
 
 ## 3. First release scope
 
@@ -284,6 +313,9 @@ High-value files:
     - original bytes / pattern
     - patched bytes / hook behavior
     - evidence and test result
+11. **Treat `MekTek.rar` as immutable.** The only allowed operation is
+    extraction to create a fresh test install. Never modify, repack, rename,
+    delete, or commit it.
 
 ## 8. Agent workflow
 
@@ -296,17 +328,30 @@ High-value files:
      -Manifest "manifests/mw4-mercs-3.1c-core.sha256"
    ```
 
-3. Reproduce the issue before changing anything.
-4. For binary work, record the exact target hash and use REA/x64dbg.
-5. Make the smallest possible change. Keep a toggle where practical.
-6. Test:
+3. For any test that may modify the install or exercise a binary patch, reset
+   to a fresh extraction first:
+
+   ```powershell
+   pwsh ./tools/Reset-Mw4TestInstall.ps1 -Force
+   ```
+
+   Do not test against a hand-modified or partially patched install. The reset
+   tool deletes only the extracted `MekTek/` folder, re-extracts from the
+   immutable `MekTek.rar`, and verifies the core manifest.
+
+4. Reproduce the issue before changing anything.
+5. For binary work, record the exact target hash and use REA/x64dbg.
+6. Make the smallest possible change. Keep a toggle where practical.
+7. Test:
    - game launches
    - first-release behavior works
    - in-game resolution menu still works
    - AntiHack still loads
    - no new crash in the menu or in a mission
-7. Update docs and commit only source, docs, manifests, and small patch data.
-8. Never leave the game or a test process running.
+8. Update docs and commit only source, docs, manifests, and small patch data.
+9. Never leave the game or a test process running.
+10. Before handing off, record whether the test started from a fresh
+    `MekTek.rar` extraction or from an already-patched install.
 
 ## 9. Current status and open questions
 
@@ -315,6 +360,8 @@ High-value files:
 - Git repository established.
 - 3.1c baseline identified and hashed.
 - Core and full manifests verified.
+- Pristine `MekTek.rar` test source recorded (hash and size).
+- Reset helper tested against a clean extraction; 32/32 core files matched.
 - Config-repair tooling written and tested.
 - Hardware Error root cause identified.
 - `-window` switch confirmed.
