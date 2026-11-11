@@ -1,22 +1,27 @@
-// mw4hook - version.dll replacement for MW4 Mercenaries 3.1c.
+// mw4hook - dinput.dll proxy entry point.
 //
-// The game loads ddraw.dll from its application directory. This module acts as
-// a ddraw proxy and installs the window/display compatibility hooks.
+// The game imports dinput.dll statically, so this module is loaded before
+// MW4Mercs.exe parses its command line. We append -window and install the
+// window sizing hooks.
 #include "hook.h"
 
 namespace {
 
 DWORD WINAPI HookThread(LPVOID) {
-    // The 3.1c executable is PECompact-packed. The import tables and display
-    // code become usable shortly after the process starts, so poll during the
-    // first seconds and then settle into a slow heartbeat.
     Sleep(100);
     for (int i = 0; i < 300; ++i) {
+        if (!mw4hook::IsWindowedCommandLinePatched()) {
+            mw4hook::ForceWindowedCommandLinePatch();
+        }
         mw4hook::ApplyResolutionDefaults();
+        mw4hook::MaintainWindow();
         mw4hook::InstallHooks();
         Sleep(10);
     }
     for (int i = 0; i < 240; ++i) {
+        if (i < 60) {
+            mw4hook::MaintainWindow();
+        }
         mw4hook::InstallHooks();
         Sleep(250);
     }
@@ -39,7 +44,7 @@ void InstallHooks() {
     }
 }
 
-void ResolveDdrawExports();
+void ResolveDinputExports();
 
 }  // namespace mw4hook
 
@@ -48,7 +53,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         DisableThreadLibraryCalls(instance);
         mw4hook::LogInit(instance);
         mw4hook::Log("dllmain: process attach\n");
-        mw4hook::ResolveDdrawExports();
+        mw4hook::ResolveDinputExports();
+        mw4hook::ForceWindowedCommandLinePatch();
+        mw4hook::InstallCommandLineHooks();
         mw4hook::Log("dllmain: attach complete\n");
         HANDLE thread = CreateThread(nullptr, 0, HookThread, nullptr, 0, nullptr);
         if (thread) {

@@ -228,8 +228,8 @@ functions plus one mission archive entry. Static patches inside those regions
 can cause `Player_Reject` on multiplayer join. If we patch the executable, we
 must know exactly what is hashed and verify multiplayer behavior.
 
-This is another reason to prefer a runtime `version.dll`-style hook over
-static executable edits.
+This is another reason to prefer a runtime proxy-DLL hook over static
+executable edits.
 
 ### 4.6 AntiHack
 
@@ -245,12 +245,12 @@ mw4patch.exe                  user-facing installer/patcher
   - verifies game hashes
   - backs up options.ini
   - writes known-good config
-  - installs ddraw.dll proxy / mw4hook.dll
+  - installs dinput.dll proxy / mw4hook.dll
   - creates a windowed shortcut with -window
   - records installed files and hashes
   - supports uninstall/rollback
 
-ddraw.dll / mw4hook.dll        native runtime hook
+dinput.dll / mw4hook.dll        native runtime hook
   - loaded by MW4Mercs.exe
   - pattern-scans the 3.1c binary
   - hooks display/window, mouse input, menu dispatch, imagehlp
@@ -259,9 +259,10 @@ ddraw.dll / mw4hook.dll        native runtime hook
 ```
 
 > **Loading note (measured):** the supported 3.1c executable is PECompact
-> packed and does not load a local `version.dll`. It does load a local
-> `ddraw.dll` from its application directory, so the development hook uses a
-> `ddraw.dll` proxy. See `docs/HOOK.md`.
+> packed. It does not load a local `version.dll`, and a local `ddraw.dll` is
+> loaded too late to affect startup decisions. It does statically import
+> `dinput.dll`, so the development hook uses a `dinput.dll` proxy and the
+> patched shortcuts pass `-window`. See `docs/HOOK.md`.
 
 The DX11 Renderer Overhaul mod is a **behavior reference** for the desired fixes
 and for the proxy-DLL loading approach. It is not source code and must not
@@ -277,11 +278,11 @@ be copied or redistributed.
 | `docs/PATCHING.md` | MTX ZIP layout, why the old patcher is unreliable |
 | `docs/REBIRTH.md` | Rebirth status and the unverified Phase 2 claim |
 | `docs/ROADMAP.md` | Milestones and non-goals |
-| `docs/HOOK.md` | Development `ddraw.dll` hook: windowed 1024x768 and limitations |
+| `docs/HOOK.md` | Development `dinput.dll` hook: windowed 1024x768 and limitations |
 | `docs/PATCHER.md` | Development `mw4patch.exe`: verification, install, backups, uninstall |
 | `manifests/` | Core and full hash manifests |
 | `templates/options.ini` | Known-good configuration template |
-| `src/hook/` | Native ddraw proxy and window/resolution hooks |
+| `src/hook/` | Native dinput proxy and window/resolution hooks |
 | `src/patcher/` | Single-executable patcher with embedded hook payload |
 | `tools/Get-Mw4InstallInfo.ps1` | Identify a build and validate options.ini |
 | `tools/Test-Mw4Manifest.ps1` | Verify files against a manifest |
@@ -406,11 +407,12 @@ High-value files:
 - `-window` switch confirmed.
 - Windowed mode tested: it ignores requested resolution and uses 800x600.
 - Rebirth Phase 2 claim reviewed and marked unverified.
-- Native hook implemented as a `ddraw.dll` proxy. A `version.dll` proxy does
-  not load in the packed 3.1c executable; the game does load a local
-  `ddraw.dll` (verified via the process module list).
-- The main window is forced to a 1024x768 client area; `SetWindowPos` resize is
-  redirected once so the game does not snap back to 800x600.
+- Native hook implemented as a `dinput.dll` proxy. A `version.dll` proxy does
+  not load in the packed 3.1c executable, and a `ddraw.dll` proxy loads too
+  late to affect startup decisions. The game statically imports `dinput.dll`,
+  so the local proxy is loaded before the game parses its command line.
+- The patched shortcuts pass `-window`; the main window is forced to a
+  1024x768 client area and centered. The monitor resolution is not changed.
 - The game's built-in 800x600 display defaults and windowed-mode pushes are
   patched in memory; `MW4Mercs.exe` is unchanged on disk.
 - The hook reaches the main menu and remains responsive. Test-only intro-skip
@@ -418,10 +420,10 @@ High-value files:
 - The process window/display path is documented in `docs/HOOK.md`.
 - A single-executable development patcher (`mw4patch.exe`) now:
   - verifies `MW4Mercs.exe` and the 32-file core manifest,
-  - backs up `options.ini` and conflicting hook files,
+  - backs up `options.ini`, conflicting hook files, and the existing shortcut,
   - patches the display keys to 1024x768/32-bit,
-  - installs the embedded `ddraw.dll` and `mw4hook.ini`,
-  - creates a windowed shortcut,
+  - installs the embedded `dinput.dll` and `mw4hook.ini`,
+  - creates a windowed shortcut and updates the existing game shortcut,
   - writes `mw4patch-install.ini` with installed hashes and backup names,
   - supports `uninstall`/rollback and `verify`/`info` commands.
   See `docs/PATCHER.md`.
@@ -432,7 +434,10 @@ High-value files:
   buffer inside the 1024x768 window (black/garbage border).
 - Verify in-mission rendering at 1024x768.
 - Retest the in-game Options > Resolution menu with the hook active.
-- Test AntiHack and multiplayer integrity with the `ddraw.dll` proxy present.
+- Test AntiHack and multiplayer integrity with the `dinput.dll` proxy present.
+- Decide whether the raw `MW4Mercs.exe` can be made windowed without the game's
+  `GetLocationFromAddress` assert. Currently the patched shortcuts are the
+  supported launch path; the raw executable remains fullscreen.
 - Map the retail oracle functions to the 3.1c binary with pattern scanning.
 - Find the exact 3.1c mouse aim/dead-zone code and the leg-turn mouse lock.
 - Determine what causes the Windows-scaling torso drift.

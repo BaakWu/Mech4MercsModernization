@@ -27,7 +27,7 @@ New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 $OutDir = [IO.Path]::GetFullPath($OutDir)
 
 $sources = @(
-    'ddraw_proxy.cpp',
+    'dinput_proxy.cpp',
     'dllmain.cpp',
     'iat.cpp',
     'log.cpp',
@@ -35,7 +35,7 @@ $sources = @(
     'window.cpp'
 ) | ForEach-Object { Join-Path $src $_ }
 
-$def = Join-Path $src 'ddraw.def'
+$def = Join-Path $src 'dinput.def'
 $objDir = Join-Path $OutDir 'obj'
 New-Item -ItemType Directory -Path $objDir -Force | Out-Null
 
@@ -51,7 +51,7 @@ $compile = @(
     "/Fo:`"$objDir\\`""
     "/Fd:`"$objDir\mw4hook.pdb`""
     ($sources -join ' ')
-    "/Fe:`"$OutDir\ddraw.dll`""
+    "/Fe:`"$OutDir\dinput.dll`""
     '/link /MACHINE:X86'
     "/DEF:`"$def`""
     'user32.lib advapi32.lib /SUBSYSTEM:WINDOWS /RELEASE'
@@ -65,7 +65,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "mw4hook build failed with exit code $LASTEXITCODE."
 }
 
-$dll = Join-Path $OutDir 'ddraw.dll'
+$dll = Join-Path $OutDir 'dinput.dll'
 if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
     throw "Build did not produce $dll"
 }

@@ -2,19 +2,9 @@
 //
 // MW4 Mercenaries 3.1c initializes its graphics globals to 800x600 before it
 // reads options.ini, and its -window path pushes 800x600 again when it applies
-// the display mode. That is why -window always produced an 800x600 client area
-// regardless of the configured resolution.
-//
-// The retail decompilation (FUN_00407BE0) shows the initialization pattern:
-//
-//   mov dword ptr [g_width],  0x320   ; 800
-//   mov dword ptr [g_height], 0x258   ; 600
-//
-// The 3.1c executable is PECompact-packed, so the addresses differ, but the
-// instruction sequence survives. This module scans the unpacked image in
-// memory, rewrites the two immediates, updates the live globals, and rewrites
-// the hardcoded pushes in the windowed display path. The on-disk executable is
-// never modified.
+// the display mode. The hook rewrites those constants in memory so the game's
+// internal render size matches the forced 1024x768 window. The executable on
+// disk is not modified.
 #include "hook.h"
 
 #include <cstring>
@@ -27,13 +17,12 @@ constexpr unsigned char kModRmAbsolute = 0x05;
 constexpr unsigned char kWidth800[4] = {0x20, 0x03, 0x00, 0x00};
 constexpr unsigned char kHeight600[4] = {0x58, 0x02, 0x00, 0x00};
 
-// Only the low part of .text contains the display code in the supported build.
-// Keeping the window small makes the early polling cheap.
 constexpr size_t kScanLimit = 0x200000;
 constexpr int kMaxScans = 400;
 
 bool g_scan_done = false;
 int g_scan_count = 0;
+bool g_windowed_commandline_patched = false;
 
 void WriteDword(unsigned char* target, int value) {
     unsigned char bytes[4] = {static_cast<unsigned char>(value & 0xFF),
@@ -53,7 +42,6 @@ bool PatchWindowedModePushes(const Config& config, unsigned char* start,
     __try {
         for (size_t offset = 0; offset + 11 < size; ++offset) {
             unsigned char* p = start + offset;
-            // push 600; push 800; call ...
             if (p[0] != 0x68 || p[1] != kHeight600[0] || p[2] != kHeight600[1] ||
                 p[3] != 0x00 || p[4] != 0x00) {
                 continue;
@@ -123,6 +111,73 @@ bool PatchStorePairs(const Config& config, unsigned char* start, size_t size,
 }
 
 }  // namespace
+
+bool ForceWindowedCommandLinePatch() {
+    if (g_windowed_commandline_patched || !GetConfig().force_windowed) {
+        return g_windowed_commandline_patched;
+    }
+    HMODULE module = GetModuleHandleW(nullptr);
+    if (!module) {
+        return false;
+    }
+    auto* base = reinterpret_cast<unsigned char*>(module);
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        return false;
+    }
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS32*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) {
+        return false;
+    }
+
+    // 3.1c command-line parser:
+    //   85 C0             test eax,eax
+    //   0F 94 C1          sete cl
+    //   68 48 41 78 00    push offset ...
+    //   68 AC 87 82 00    push offset ...
+    //   88 0D 7C 06 24 01 mov [0x0124067C], cl
+    // Patch `sete cl` to `xor ecx,ecx; nop` so the windowed path is always
+    // selected. This runs from the dinput proxy before the game entry point.
+    static const unsigned char pattern[] = {0x85, 0xC0, 0x0F, 0x94, 0xC1, 0x68,
+                                            0x48, 0x41, 0x78, 0x00};
+    auto* section = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+        if ((section->Characteristics & IMAGE_SCN_MEM_EXECUTE) == 0) {
+            continue;
+        }
+        size_t size = section->Misc.VirtualSize;
+        if (size > kScanLimit) {
+            size = kScanLimit;
+        }
+        unsigned char* start = base + section->VirtualAddress;
+        __try {
+            for (size_t offset = 0; offset + sizeof(pattern) < size; ++offset) {
+                if (memcmp(start + offset, pattern, sizeof(pattern)) != 0) {
+                    continue;
+                }
+                unsigned char* instruction = start + offset + 2;
+                DWORD oldProtect = 0;
+                if (VirtualProtect(instruction, 3, PAGE_READWRITE,
+                                   &oldProtect)) {
+                    instruction[0] = 0x31;  // xor ecx, ecx
+                    instruction[1] = 0xC9;
+                    instruction[2] = 0x90;  // nop
+                    VirtualProtect(instruction, 3, oldProtect, &oldProtect);
+                    g_windowed_commandline_patched = true;
+                    Log("windowed: patched -window check at rva=0x%08lX\n",
+                        section->VirtualAddress + offset + 2);
+                    return true;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    return false;
+}
+
+bool IsWindowedCommandLinePatched() {
+    return g_windowed_commandline_patched;
+}
 
 void ApplyResolutionDefaults() {
     const Config& config = GetConfig();

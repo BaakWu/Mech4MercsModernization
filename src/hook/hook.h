@@ -1,8 +1,8 @@
 // mw4hook - runtime compatibility layer for MW4 Mercenaries 3.1c
 //
-// ddraw.dll proxy. The game loads ddraw.dll from its application directory, so
-// placing this file next to MW4Mercs.exe loads our code before the game
-// creates its main window.
+// dinput.dll proxy. The game imports dinput.dll statically, so this proxy is
+// loaded during startup, before the game parses its command line and creates
+// its main window.
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
@@ -14,11 +14,20 @@ namespace mw4hook {
 void LogInit(HINSTANCE self);
 void Log(const char* fmt, ...);
 
-// Install the Win32 hooks once the main module has usable import tables.
+// Install the Win32 window hooks once the main module has usable imports.
 void InstallHooks();
-
-// Install the window/display hooks (internal).
 int InstallWindowHooks();
+
+// Append -window to the process command line before the game parses it.
+void InstallCommandLineHooks();
+
+// Keep the game's main window at the configured client size during startup.
+void MaintainWindow();
+
+// Patch the game's -window argument check so the normal windowed path is
+// selected from startup.
+bool ForceWindowedCommandLinePatch();
+bool IsWindowedCommandLinePatched();
 
 // Replace an imported function by matching its resolved address.
 bool PatchIatByAddress(HMODULE module, const char* dll_name,
@@ -30,6 +39,7 @@ struct Config {
     bool log_enabled = true;
     bool hooks_enabled = true;
     bool window_enabled = true;
+    bool force_windowed = true;
     bool resolution_enabled = true;
     int window_width = 1024;
     int window_height = 768;

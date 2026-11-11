@@ -38,11 +38,16 @@ The patcher installs a windowed shortcut in the game directory:
 MechWarrior 4 Mercenaries (Windowed).lnk
 ```
 
+It also updates the existing `Shortcut to MW4Mercs.exe.lnk` to use `-window`
+(backing it up first). Use one of those shortcuts; starting the raw
+`MW4Mercs.exe` still uses the game's fullscreen default.
+
 ## Notes
 
 - The patcher verifies `MW4Mercs.exe` and all 32 core files before changing
   anything.
-- It backs up `options.ini` and any conflicting `ddraw.dll` / `mw4hook.ini`.
+- It backs up `options.ini`, conflicting `dinput.dll` / `mw4hook.ini` files, and
+  the existing shortcut.
 - The game executable is not modified.
 - This is a development build. The original frontend still renders at 800x600
   inside the 1024x768 window.

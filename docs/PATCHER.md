@@ -7,7 +7,7 @@ testing the windowed 1024x768 fix. It is not a signed public release.
 
 `mw4patch.exe` embeds:
 
-- the `ddraw.dll` runtime hook,
+- the `dinput.dll` runtime hook,
 - `mw4hook.ini`,
 - the 32-file 3.1c core manifest,
 - the known-good `options.ini` template.
@@ -17,13 +17,16 @@ On install it:
 1. verifies `MW4Mercs.exe` against the supported 3.1c SHA-256,
 2. verifies all 32 core files against the embedded manifest,
 3. refuses to run while `MW4Mercs.exe` is running,
-4. backs up `options.ini` and any conflicting `ddraw.dll` / `mw4hook.ini`,
+4. backs up `options.ini`, any conflicting `dinput.dll` / `mw4hook.ini`, and
+   the existing game shortcut,
 5. patches the `[graphics options]` display keys to 1024x768, 32-bit,
-6. extracts `ddraw.dll` and `mw4hook.ini`,
-7. creates `MechWarrior 4 Mercenaries (Windowed).lnk`,
+6. extracts `dinput.dll` and `mw4hook.ini`,
+7. creates `MechWarrior 4 Mercenaries (Windowed).lnk` and updates the existing
+   `Shortcut to MW4Mercs.exe.lnk` to use `-window`,
 8. writes `mw4patch-install.ini` with installed hashes and backup names.
 
-The game executable is never modified.
+The game executable is never modified. The raw `MW4Mercs.exe` still starts in
+the game's fullscreen default; use one of the patched shortcuts.
 
 ## Commands
 
@@ -63,22 +66,23 @@ Default backup names:
 
 ```text
 options.ini.mw4patch-backup
-ddraw.dll.mw4patch-backup
+dinput.dll.mw4patch-backup
 mw4hook.ini.mw4patch-backup
+Shortcut to MW4Mercs.exe.lnk.mw4patch-backup
 ```
 
 `mw4patch-install.ini` records the tool version, UTC timestamp, target hash,
-installed file hashes, shortcut name, and backup names. Uninstall uses it to
+installed file hashes, shortcut names, and backup names. Uninstall uses it to
 remove only files that match the recorded hooks and to restore the backups.
 
-If the recorded `ddraw.dll` hash does not match the file on disk, uninstall
+If the recorded `dinput.dll` hash does not match the file on disk, uninstall
 leaves that file alone and keeps the backup rather than overwriting user
 changes.
 
 ## Build
 
 ```powershell
-pwsh ./src/hook/build.ps1      # builds the embedded ddraw.dll and config
+pwsh ./src/hook/build.ps1      # builds the embedded dinput.dll and config
 pwsh ./src/patcher/build.ps1   # builds artifacts/mw4patch.exe and publishes dist/mw4patch.exe
 ```
 
@@ -96,6 +100,10 @@ and links a single console executable (`/MT`, no VC++ redistributable). Use
 - Sound can trigger a DirectSound `CreateSoundBuffer` error in this test
   environment; `-nosound` is used for display testing only.
 - AntiHack and multiplayer have not been tested with the patcher installed.
+- The raw `MW4Mercs.exe` remains fullscreen. The patcher updates the existing
+  shortcut and adds a windowed shortcut; those are the supported launch paths.
+  Forcing the raw executable into the windowed path triggered the game's own
+  `GetLocationFromAddress` assert and is not used.
 
 ## Safety notes
 

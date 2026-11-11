@@ -147,7 +147,7 @@ The script backs up the existing `options.ini` before writing a new one.
 
 ### Development hook: windowed 1024x768
 
-A first native hook is in `src/hook/`. It is a `ddraw.dll` proxy that:
+A first native hook is in `src/hook/`. It is a `dinput.dll` proxy that:
 
 - starts `MW4Mercs.exe -window` in a 1024x768 client-area window
 - rewrites the game's built-in 800x600 display defaults in memory
@@ -214,12 +214,12 @@ This is a gameplay/input change and is not part of the first release.
 |---|---|
 | `AGENTS.md` | Agent/contributor guide, release scope, technical references |
 | `docs/BASELINE.md` | Supported build identity, hashes, known-good configuration |
-| `docs/HOOK.md` | Development `ddraw.dll` hook: windowed 1024x768 implementation and limitations |
+| `docs/HOOK.md` | Development `dinput.dll` hook: windowed 1024x768 implementation and limitations |
 | `docs/PATCHER.md` | Development `mw4patch.exe`: verification, install, backups, uninstall |
 | `docs/PATCHING.md` | Legacy patch format and modern patching plan |
 | `docs/ROADMAP.md` | Milestones and non-goals |
 | `manifests/` | Core and full SHA-256 baselines |
-| `src/hook/` | Native `ddraw.dll` proxy and Win32/display hooks |
+| `src/hook/` | Native `dinput.dll` proxy and Win32/display hooks |
 | `src/patcher/` | Single-executable patcher with embedded hook payload |
 | `templates/` | Known-good configuration template |
 | `tools/` | Inspect, verify, repair, window-test, and manifest scripts |
