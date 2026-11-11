@@ -1,0 +1,23 @@
+# ---------------------------------------------------------------------------
+# Proprietary game data and third-party patch media
+# ---------------------------------------------------------------------------
+# These directories contain the game distribution and legacy MekTek patch
+# payloads. They must never be committed. Supply them locally.
+/MekTek/
+/mekTekpatchPacks/
+
+# Legacy patch/archive formats if they are moved back to the repo root.
+*.mtx
+*.rar
+*.iso
+*.cue
+*.bin
+
+# ---------------------------------------------------------------------------
+# Local build, test, and runtime artifacts
+# ---------------------------------------------------------------------------
+/artifacts/
+/tmp/
+*.log
+*.bak
+*.bak-*

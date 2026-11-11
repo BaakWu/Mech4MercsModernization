@@ -1,0 +1,8 @@
+* text=auto
+
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.md text eol=lf
+*.json text eol=lf
+*.ini text eol=crlf
+*.sha256 text eol=lf
