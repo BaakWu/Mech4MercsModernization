@@ -1,133 +1,206 @@
-# MechWarrior 4: Mercenaries — Modern Patching
+# MechWarrior 4: Mercenaries — Modern Patch
 
-An independent, offline-first patching and preservation project for
-**MechWarrior 4: Mercenaries**.
+An independent, reversible patch project for **MechWarrior 4: Mercenaries
+3.1c** (`51.03.01.0030`).
 
-The goal is not to rewrite the engine. The goal is to make the existing game
-installable, verifiable, and runnable on modern Windows without depending on
-dead MekTek services or undocumented patch state.
+The goal is to make the original game launch and play correctly on modern
+Windows without replacing the engine, breaking AntiHack, or shipping game
+files.
 
-## Canonical baseline
+> **Status: pre-release.** There is no public patch download yet. The current
+> repository contains the verified baseline, hash manifests, configuration
+> repair tools, and the technical plan for the first patch.
 
-We use the publicly available **MW4 Mercs MekTek 3.1c** distribution from
-ModDB as the baseline:
+## Why this exists
 
-- Game version: `51.03.01.0030`
-- `MW4Mercs.exe` SHA-256:
-  `72bbb1ba3e5e5e7dc7607ca403f3d9aca301d0b16814a6b577bda7ec5c922b41`
-- Local extracted path:
-  `MekTek/Mechwarrior Mercenaries - Mektek Mekpak`
-- Status: launches on Windows 11 with an AMD Radeon AI PRO R9700 once
-  `options.ini` contains valid display settings.
+MechWarrior 4: Mercenaries was built for DirectX 7, 32-bit Windows, and display
+hardware from 2002. On modern systems it can fail in ways that look like
+hardware incompatibility but are often configuration or compatibility bugs.
 
-The game data is **not** part of this repository. `MekTek/` and
-`mekTekpatchPacks/` are ignored by Git.
+The project’s first release focuses on the problems that matter most for
+getting the game running properly:
 
-## What we established
+- launch in **windowed mode at 1024x768**
+- keep the **in-game Options > Resolution controls working**
+- smooth **mouse aiming** at any frame rate
+- fix the mouse **sticking while the legs follow the torso**
+- fix **torso drift** when Windows display scaling is above 100%
+- make menu buttons accept the **first click**
+- start on the **main monitor** without a black screen until clicked
+- fix **texture mipmap corruption** when a second video card is configured
+- fix crashes involving the outdated **`imagehlp.dll`** path
+- fix the **menu message-dispatch crash**
+- prevent a failed mode switch from leaving the game in **16-bit color**
+- keep the game’s **AntiHack active and untouched**
 
-The original instructions in this folder used the old MTX chain:
+The first release does **not** replace the renderer, reimplement the engine, or
+change the single-player campaign.
 
-```text
-all -> 0028 -> 0029 -> 0030
-```
+## Planned user experience
 
-That chain depends on `mtxservice.mektek.net`, which no longer resolves. The
-MTX client falls back to offline mode and can still apply local `.mtx` files,
-but it is not reliable:
+The release will be a single **`mw4patch.exe`**:
 
-- A patch attempt failed on `MW4MekStats.dll`, then appeared to succeed on a
-  retry.
-- The resulting install reported `51.03.01.0030`, but its executable and
-  several DLLs did **not** match the known-good ModDB 3.1c build.
-- The install wrote `options.ini` with `screenwidth=0`, `screenheight=0`,
-  `bitdepth=65535`, and `videodriverindex=-1`.
-- Launching that install produced the **Hardware Error** dialog.
+1. Verify the supported game build by hash.
+2. Back up configuration and any files it changes.
+3. Write a known-good display configuration.
+4. Install an optional runtime fix layer next to the game executable.
+5. Create a windowed launch shortcut.
+6. Record exactly what was installed.
+7. Provide an uninstall/rollback path.
 
-Copying a valid `options.ini` into the same install made it launch. The GPU is
-not the problem; the invalid display configuration is.
+The fix layer is loaded at runtime rather than rewriting `MW4Mercs.exe`. That
+keeps the patch reversible and avoids touching the game’s AntiHack or the code
+regions used by the multiplayer integrity check.
 
-The ModDB 3.1c folder matches the independently working install and is the
-baseline this repository will verify against.
+## Supported game
 
-## What is in the repo
-
-| Path | Purpose |
+| Field | Value |
 |---|---|
-| `docs/BASELINE.md` | Identity and hashes of the canonical 3.1c base |
-| `docs/PATCHING.md` | Legacy MTX format, why it is unreliable, and the modern replacement plan |
-| `docs/REBIRTH.md` | Public status of MekTek Rebirth, including the Phase 2 claim |
-| `docs/ROADMAP.md` | Milestones and non-goals |
-| `manifests/` | Known-good core and full hash manifests |
-| `templates/options.ini` | Known-good display/configuration template |
-| `tools/` | PowerShell inspection, verification, and config-repair tools |
+| Game | MechWarrior 4: Mercenaries |
+| Version | `3.1c` |
+| Executable version | `51.03.01.0030` |
+| Executable SHA-256 | `72bbb1ba3e5e5e7dc7607ca403f3d9aca301d0b16814a6b577bda7ec5c922b41` |
 
-## Quick start
+You must supply your own legally obtained copy of the game. This repository
+does not contain the game, its assets, or a modified executable.
 
-Inspect an install:
+## What works today
+
+The repository currently provides PowerShell tooling for the baseline:
+
+- identify a game install and its version
+- verify core and full file manifests
+- detect an invalid `options.ini`
+- write a known-good `options.ini` with backup
+- generate a full SHA-256 manifest
+
+### Inspect an install
 
 ```powershell
-pwsh ./tools/Get-Mw4InstallInfo.ps1 `
-  -Install "MekTek/Mechwarrior Mercenaries - Mektek Mekpak"
+pwsh ./tools/Get-Mw4InstallInfo.ps1 -Install "C:\Games\MechWarrior4Mercs"
 ```
 
-Repair a broken `options.ini` (backs up the old one first):
-
-```powershell
-pwsh ./tools/Repair-Mw4Config.ps1 `
-  -Install "MekTek/Mechwarrior Mercenaries - Mektek Mekpak" `
-  -Width 1920 -Height 1080
-```
-
-Verify the core files:
+### Verify the core files
 
 ```powershell
 pwsh ./tools/Test-Mw4Manifest.ps1 `
-  -Install "MekTek/Mechwarrior Mercenaries - Mektek Mekpak" `
+  -Install "C:\Games\MechWarrior4Mercs" `
   -Manifest "manifests/mw4-mercs-3.1c-core.sha256"
 ```
 
-Verify the full baseline (1,716 distribution files):
+### Verify the full baseline
 
 ```powershell
 pwsh ./tools/Test-Mw4Manifest.ps1 `
-  -Install "MekTek/Mechwarrior Mercenaries - Mektek Mekpak" `
+  -Install "C:\Games\MechWarrior4Mercs" `
   -Manifest "manifests/mw4-mercs-3.1c-full.sha256"
 ```
 
-Generate a full manifest for a clean install:
+### Repair display configuration
 
 ```powershell
-pwsh ./tools/New-Mw4Manifest.ps1 `
-  -Install "MekTek/Mechwarrior Mercenaries - Mektek Mekpak" `
-  -Output "artifacts/mw4-mercs-3.1c-full.sha256"
+pwsh ./tools/Repair-Mw4Config.ps1 `
+  -Install "C:\Games\MechWarrior4Mercs" `
+  -Width 1024 -Height 768
 ```
 
-## Legacy patch packs
+The script backs up the existing `options.ini` before writing a new one.
 
-`mekTekpatchPacks/` contains the old MTX base, incremental patches, hotfixes,
-and installers. It is kept locally as research material only.
+## Hardware Error troubleshooting
 
-For the normal install path:
+A common cause of this dialog:
 
-- **Do not** run `SetupMTX*.exe`.
-- **Do not** apply the incremental MTX patches to the ModDB 3.1c base.
-- **Do not** apply the `0030a/b/c` hotfixes unless we are deliberately
-  reconstructing an older base in a disposable copy.
+> Your current hardware or driver setup is not compatible with MechWarrior 4.
 
-The ModDB 3.1c base is already the known-good final state. The old patch chain
-is useful for understanding the delta format and for reconstructing earlier
-versions, not for producing a clean 3.1c install.
+is an invalid `options.ini`, especially:
 
-## Non-goals
+```ini
+videodriverindex=-1
+screenwidth=0
+screenheight=0
+bitdepth=65535
+```
 
-- Redistributing the game or its assets.
-- Reimplementing the engine.
-- Replacing MekTek Rebirth or competing with it.
-- Shipping a modified executable without a clear, auditable patch record.
+Try `tools/Repair-Mw4Config.ps1` before assuming the GPU is unsupported. The
+script writes a non-zero resolution, 32-bit color, and a valid video driver
+index.
+
+Note: the base game’s `-window` switch currently opens an 800x600 window
+regardless of the configured resolution. The first patch release is intended
+to fix that; configuration alone is not enough.
+
+## Backlog
+
+- **WASD movement with throttle decay**, similar to MechWarrior 5:
+  - `W` throttle up
+  - `S` throttle down; holding past zero goes into reverse
+  - `A` turn left
+  - `D` turn right
+  - throttle decays naturally instead of behaving like a binary key
+
+This is a gameplay/input change and is not part of the first release.
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `AGENTS.md` | Agent/contributor guide, release scope, technical references |
+| `docs/BASELINE.md` | Supported build identity, hashes, known-good configuration |
+| `docs/PATCHING.md` | Legacy patch format and modern patching plan |
+| `docs/ROADMAP.md` | Milestones and non-goals |
+| `manifests/` | Core and full SHA-256 baselines |
+| `templates/` | Known-good configuration template |
+| `tools/` | Inspect, verify, repair, and manifest scripts |
+
+## Development
+
+Current tools require **PowerShell 7**.
+
+The planned patcher will be a self-contained Windows executable. The planned
+runtime fix layer will be a native DLL loaded beside the game executable. Build
+and packaging instructions will be added with the first patcher scaffold.
+
+Before working on binary behavior, read `AGENTS.md`. In particular:
+
+- do not commit game files
+- do not modify the verified baseline or legacy patch media
+- do not touch AntiHack
+- prefer runtime hooks over static executable patches
+- verify hashes before and after any change
+
+## Contributing
+
+Good contributions at this stage:
+
+- reproducing modern-Windows launch and input bugs
+- testing the existing configuration repair on different GPUs and display
+  layouts
+- documenting exact game versions and hashes
+- mapping the retail decompilation behavior onto the 3.1c binary
+- implementing small, reversible fixes with tests
+
+Please keep changes focused and document any binary-level work with the target
+file hash, original bytes or pattern, and observed behavior.
+
+## Roadmap
+
+See `docs/ROADMAP.md` for the milestone plan. The short version:
+
+1. Verify the baseline and fix configuration. **Done.**
+2. Build the `mw4patch.exe` scaffold and release pipeline.
+3. Implement windowed 1024x768 and display fixes.
+4. Implement mouse, menu, and crash fixes.
+5. Add optional WASD throttle-decay controls.
+6. Ship a single reversible patch executable.
 
 ## Legal
 
-MechWarrior, BattleTech, MechWarrior 4, and related marks belong to their
-respective owners. This repository contains no game executables, DLLs, art,
-audio, maps, or other proprietary game content. You must supply your own
-legally obtained copy of the game. See `NOTICE.md`.
+This is an unofficial community project. It is not affiliated with or endorsed
+by Microsoft, FASA Interactive, Cyberlore Studios, Catalyst Game Labs, The
+Topps Company, or any current rights holder.
+
+This repository contains no game executables, DLLs, art, audio, maps, or other
+proprietary game content. You must supply your own legally obtained copy of the
+game. The original code and documentation in this repository are licensed under
+the MIT License; that license does not grant rights to the game or its assets.
+See `NOTICE.md` for details.
