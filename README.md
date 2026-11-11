@@ -157,6 +157,23 @@ Build and test instructions are in `docs/HOOK.md`. This is a development
 implementation, not the final patcher, and the original frontend still draws
 at 800x600 inside the larger window (see known limitations in that document).
 
+### Development patcher
+
+`src/patcher/` builds a single self-contained `mw4patch.exe`. It embeds the
+hook DLL, verifies the supported 3.1c build against the core manifest, backs up
+`options.ini`, patches the display settings, installs the hook, creates a
+windowed shortcut, and writes an install record with uninstall support.
+
+```powershell
+pwsh ./src/patcher/build.ps1
+
+.\artifacts\mw4patch.exe verify  "MekTek\Mechwarrior Mercenaries - Mektek Mekpak"
+.\artifacts\mw4patch.exe install "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
+.\artifacts\mw4patch.exe uninstall "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
+```
+
+See `docs/PATCHER.md` for the install record, backups, and current limitations.
+
 ## Hardware Error troubleshooting
 
 A common cause of this dialog:
@@ -198,10 +215,12 @@ This is a gameplay/input change and is not part of the first release.
 | `AGENTS.md` | Agent/contributor guide, release scope, technical references |
 | `docs/BASELINE.md` | Supported build identity, hashes, known-good configuration |
 | `docs/HOOK.md` | Development `ddraw.dll` hook: windowed 1024x768 implementation and limitations |
+| `docs/PATCHER.md` | Development `mw4patch.exe`: verification, install, backups, uninstall |
 | `docs/PATCHING.md` | Legacy patch format and modern patching plan |
 | `docs/ROADMAP.md` | Milestones and non-goals |
 | `manifests/` | Core and full SHA-256 baselines |
 | `src/hook/` | Native `ddraw.dll` proxy and Win32/display hooks |
+| `src/patcher/` | Single-executable patcher with embedded hook payload |
 | `templates/` | Known-good configuration template |
 | `tools/` | Inspect, verify, repair, window-test, and manifest scripts |
 

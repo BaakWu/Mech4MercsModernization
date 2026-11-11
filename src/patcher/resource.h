@@ -1,0 +1,6 @@
+#pragma once
+
+#define IDR_DDRAW 101
+#define IDR_HOOK_INI 102
+#define IDR_CORE_MANIFEST 103
+#define IDR_OPTIONS_TEMPLATE 104

@@ -70,6 +70,14 @@ if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
     throw "Build did not produce $dll"
 }
 
+$iniSource = Join-Path $src 'mw4hook.ini'
+$iniTarget = Join-Path $OutDir 'mw4hook.ini'
+if (-not (Test-Path -LiteralPath $iniSource -PathType Leaf)) {
+    throw "Hook configuration not found: $iniSource"
+}
+Copy-Item -LiteralPath $iniSource -Destination $iniTarget -Force
+
 Write-Output ''
 Write-Output "Built: $dll"
 Write-Output ("SHA-256: " + (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant())
+Write-Output "Config: $iniTarget"

@@ -278,9 +278,11 @@ be copied or redistributed.
 | `docs/REBIRTH.md` | Rebirth status and the unverified Phase 2 claim |
 | `docs/ROADMAP.md` | Milestones and non-goals |
 | `docs/HOOK.md` | Development `ddraw.dll` hook: windowed 1024x768 and limitations |
+| `docs/PATCHER.md` | Development `mw4patch.exe`: verification, install, backups, uninstall |
 | `manifests/` | Core and full hash manifests |
 | `templates/options.ini` | Known-good configuration template |
 | `src/hook/` | Native ddraw proxy and window/resolution hooks |
+| `src/patcher/` | Single-executable patcher with embedded hook payload |
 | `tools/Get-Mw4InstallInfo.ps1` | Identify a build and validate options.ini |
 | `tools/Test-Mw4Manifest.ps1` | Verify files against a manifest |
 | `tools/Repair-Mw4Config.ps1` | Write a safe options.ini with backup |
@@ -414,6 +416,15 @@ High-value files:
 - The hook reaches the main menu and remains responsive. Test-only intro-skip
   and window-inspection helpers were added.
 - The process window/display path is documented in `docs/HOOK.md`.
+- A single-executable development patcher (`mw4patch.exe`) now:
+  - verifies `MW4Mercs.exe` and the 32-file core manifest,
+  - backs up `options.ini` and conflicting hook files,
+  - patches the display keys to 1024x768/32-bit,
+  - installs the embedded `ddraw.dll` and `mw4hook.ini`,
+  - creates a windowed shortcut,
+  - writes `mw4patch-install.ini` with installed hashes and backup names,
+  - supports `uninstall`/rollback and `verify`/`info` commands.
+  See `docs/PATCHER.md`.
 
 ### Open
 
