@@ -12,7 +12,6 @@ This repository does not contain:
 - the MekTek free release
 - the legacy MTX/hotfix payloads
 
-Those files are supplied locally and are excluded by `.gitignore`.
 
 The tools and documentation here are intended for interoperability,
 preservation, and research on software the user already has the right to use.
