@@ -6,17 +6,15 @@ Status: **development only**. This documents the working windowed launch.
 
 - The patched shortcut launches `MW4Mercs.exe -window` in a **1024x768
   client-area window**, centered on the primary monitor.
+- Starting the raw `MW4Mercs.exe` also works: the proxy relaunches it with
+  `-window` before the game initializes. The first process exits immediately
+  and the visible game process runs windowed.
 - The monitor stays at the desktop resolution; the game does not switch it to
   800x600 or another mode.
 - The game uses its original renderer and assets.
 - The on-disk `MW4Mercs.exe` is not modified.
 - The game's built-in 800x600 display defaults are patched **in memory**.
 - The in-game resolution menu is left in place and is not disabled.
-
-**Important:** the raw `MW4Mercs.exe` still starts in the game's fullscreen
-default. The supported launch is the patched shortcut (`-window`). The patcher
-updates the existing `Shortcut to MW4Mercs.exe.lnk` and creates
-`MechWarrior 4 Mercenaries (Windowed).lnk`.
 
 ## Why `dinput.dll`
 
@@ -30,12 +28,14 @@ during import resolution - before the game parses its command line and creates
 its main window. The module list confirms the game loads the local
 `dinput.dll`.
 
-Attempts to force the raw executable into the windowed path from inside the
-process (PEB command-line rewrite, patching the `-window` check, blocking the
-display-mode syscall, and forcing the window style) reached the windowed size
-but triggered the game's own `GetLocationFromAddress` assert. Those experiments
-are not part of the supported launch. The reliable path is the game's real
-`-window` switch.
+Attempts to force the raw executable into the windowed path in-process (PEB
+command-line rewrite, patching the `-window` check, blocking the display-mode
+syscall, and forcing the window style) reached the windowed size but triggered
+the game's own `GetLocationFromAddress` assert. The working approach is a
+**startup relaunch**: the proxy checks the command line at DllMain time, and if
+`-window` is missing it creates a new `MW4Mercs.exe ... -window` process and
+terminates the original. The relaunched process takes the game's normal
+windowed path.
 
 ## Components
 
@@ -134,6 +134,8 @@ MechWarrior Mercenaries  ...  1024x768  1030x797
 - Fresh 3.1c extraction verified against the 32-file core manifest.
 - Local `dinput.dll` proxy loads in `MW4Mercs.exe` (PID matches the log).
 - `MW4Mercs.exe -window -nosound` produces a centered 1024x768 client area.
+- Starting `MW4Mercs.exe -nosound` without `-window` relaunches the process
+  with `-window`; the visible process is a centered 1024x768 window.
 - The desktop resolution remains 2048x1152 for the whole run.
 - The game reaches the main menu and remains responsive.
 - No game executable bytes are changed on disk.
@@ -145,8 +147,9 @@ MechWarrior Mercenaries  ...  1024x768  1030x797
    black/garbage space on the right and bottom.
 2. **In-mission rendering is not yet verified** at 1024x768.
 3. **The in-game resolution menu is not yet retested** with the hook active.
-4. **The raw executable remains fullscreen.** Use the patched shortcut. Forcing
-   the raw launch triggered the game's `GetLocationFromAddress` assert.
+4. **The relaunch creates a brief second process.** The original process exits
+   before the game initializes; the relaunched process is the visible game. The
+   patched shortcuts pass `-window` directly and skip this step.
 5. **AntiHack and multiplayer have not been tested.**
 6. **The intro-skip helper is test-only.** It modifies files under
    `Content\Movies` and must be restored before a baseline/hash check.

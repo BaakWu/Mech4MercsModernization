@@ -261,8 +261,9 @@ dinput.dll / mw4hook.dll        native runtime hook
 > **Loading note (measured):** the supported 3.1c executable is PECompact
 > packed. It does not load a local `version.dll`, and a local `ddraw.dll` is
 > loaded too late to affect startup decisions. It does statically import
-> `dinput.dll`, so the development hook uses a `dinput.dll` proxy and the
-> patched shortcuts pass `-window`. See `docs/HOOK.md`.
+> `dinput.dll`, so the development hook uses a `dinput.dll` proxy. It relaunches
+> a process started without `-window` and the patched shortcuts pass the switch
+> directly. See `docs/HOOK.md`.
 
 The DX11 Renderer Overhaul mod is a **behavior reference** for the desired fixes
 and for the proxy-DLL loading approach. It is not source code and must not
@@ -413,6 +414,10 @@ High-value files:
   so the local proxy is loaded before the game parses its command line.
 - The patched shortcuts pass `-window`; the main window is forced to a
   1024x768 client area and centered. The monitor resolution is not changed.
+- Starting the raw `MW4Mercs.exe` without `-window` relaunches it with the
+  switch before the game initializes. The first process exits; the visible
+  process runs windowed. This avoids the in-process forcing path that triggered
+  the `GetLocationFromAddress` assert.
 - The game's built-in 800x600 display defaults and windowed-mode pushes are
   patched in memory; `MW4Mercs.exe` is unchanged on disk.
 - The hook reaches the main menu and remains responsive. Test-only intro-skip
@@ -435,9 +440,6 @@ High-value files:
 - Verify in-mission rendering at 1024x768.
 - Retest the in-game Options > Resolution menu with the hook active.
 - Test AntiHack and multiplayer integrity with the `dinput.dll` proxy present.
-- Decide whether the raw `MW4Mercs.exe` can be made windowed without the game's
-  `GetLocationFromAddress` assert. Currently the patched shortcuts are the
-  supported launch path; the raw executable remains fullscreen.
 - Map the retail oracle functions to the 3.1c binary with pattern scanning.
 - Find the exact 3.1c mouse aim/dead-zone code and the leg-turn mouse lock.
 - Determine what causes the Windows-scaling torso drift.

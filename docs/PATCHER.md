@@ -25,8 +25,9 @@ On install it:
    `Shortcut to MW4Mercs.exe.lnk` to use `-window`,
 8. writes `mw4patch-install.ini` with installed hashes and backup names.
 
-The game executable is never modified. The raw `MW4Mercs.exe` still starts in
-the game's fullscreen default; use one of the patched shortcuts.
+The game executable is never modified. The proxy relaunches a raw
+`MW4Mercs.exe` launch with `-window`; the patched shortcuts pass the switch
+directly.
 
 ## Commands
 
@@ -100,10 +101,9 @@ and links a single console executable (`/MT`, no VC++ redistributable). Use
 - Sound can trigger a DirectSound `CreateSoundBuffer` error in this test
   environment; `-nosound` is used for display testing only.
 - AntiHack and multiplayer have not been tested with the patcher installed.
-- The raw `MW4Mercs.exe` remains fullscreen. The patcher updates the existing
-  shortcut and adds a windowed shortcut; those are the supported launch paths.
-  Forcing the raw executable into the windowed path triggered the game's own
-  `GetLocationFromAddress` assert and is not used.
+- Launching the raw `MW4Mercs.exe` relaunches it with `-window`; the original
+  process exits before the game initializes. The patched shortcuts pass the
+  switch directly and skip the relaunch.
 
 ## Safety notes
 

@@ -1,8 +1,8 @@
 // mw4hook - dinput.dll proxy entry point.
 //
-// The game imports dinput.dll statically, so this module is loaded before
-// MW4Mercs.exe parses its command line. We append -window and install the
-// window sizing hooks.
+// The game imports dinput.dll statically, so this module is loaded during
+// startup. If the process lacks -window, the proxy relaunches it with the
+// switch, then the relaunched process installs the window sizing hooks.
 #include "hook.h"
 
 namespace {
@@ -10,18 +10,11 @@ namespace {
 DWORD WINAPI HookThread(LPVOID) {
     Sleep(100);
     for (int i = 0; i < 300; ++i) {
-        if (!mw4hook::IsWindowedCommandLinePatched()) {
-            mw4hook::ForceWindowedCommandLinePatch();
-        }
         mw4hook::ApplyResolutionDefaults();
-        mw4hook::MaintainWindow();
         mw4hook::InstallHooks();
         Sleep(10);
     }
     for (int i = 0; i < 240; ++i) {
-        if (i < 60) {
-            mw4hook::MaintainWindow();
-        }
         mw4hook::InstallHooks();
         Sleep(250);
     }
@@ -54,8 +47,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         mw4hook::LogInit(instance);
         mw4hook::Log("dllmain: process attach\n");
         mw4hook::ResolveDinputExports();
-        mw4hook::ForceWindowedCommandLinePatch();
-        mw4hook::InstallCommandLineHooks();
+        mw4hook::RelaunchWindowed();
         mw4hook::Log("dllmain: attach complete\n");
         HANDLE thread = CreateThread(nullptr, 0, HookThread, nullptr, 0, nullptr);
         if (thread) {

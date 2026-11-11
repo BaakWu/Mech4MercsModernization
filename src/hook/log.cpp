@@ -47,8 +47,8 @@ void LoadConfig() {
         L"window", L"height", g_config.window_height, path));
     g_config.window_enabled =
         GetPrivateProfileIntW(L"window", L"enabled", 1, path) != 0;
-    g_config.force_windowed =
-        GetPrivateProfileIntW(L"window", L"force", 1, path) != 0;
+    g_config.relaunch =
+        GetPrivateProfileIntW(L"window", L"relaunch", 1, path) != 0;
     g_config.hooks_enabled =
         GetPrivateProfileIntW(L"hook", L"enabled", 1, path) != 0;
     g_config.resolution_enabled =

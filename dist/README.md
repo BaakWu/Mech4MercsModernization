@@ -39,8 +39,8 @@ MechWarrior 4 Mercenaries (Windowed).lnk
 ```
 
 It also updates the existing `Shortcut to MW4Mercs.exe.lnk` to use `-window`
-(backing it up first). Use one of those shortcuts; starting the raw
-`MW4Mercs.exe` still uses the game's fullscreen default.
+(backing it up first). Starting the raw `MW4Mercs.exe` also works: the proxy
+relaunches it with `-window` before the game initializes.
 
 ## Notes
 

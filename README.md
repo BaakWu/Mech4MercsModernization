@@ -150,6 +150,7 @@ The script backs up the existing `options.ini` before writing a new one.
 A first native hook is in `src/hook/`. It is a `dinput.dll` proxy that:
 
 - starts `MW4Mercs.exe -window` in a 1024x768 client-area window
+- relaunches a raw `MW4Mercs.exe` launch with `-window` before the game starts
 - rewrites the game's built-in 800x600 display defaults in memory
 - does not modify `MW4Mercs.exe` on disk
 

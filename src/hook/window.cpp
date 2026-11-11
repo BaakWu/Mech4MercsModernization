@@ -1,14 +1,13 @@
-// Window sizing and startup command-line hooks.
+// Window sizing and startup relaunch.
 //
 // The retail 3.1c executable's -window switch always creates an 800x600 client
-// area. These hooks force the main window to the configured size. The
-// command-line hook appends -window before the game parses its arguments, so
-// starting MW4Mercs.exe directly uses the game's normal windowed path instead
-// of switching the monitor to a fullscreen mode.
+// area. These hooks force the main window to the configured size and center it.
+// If the game was started without -window, the proxy relaunches it with the
+// switch; this avoids the game's fullscreen display path (and the
+// GetLocationFromAddress assert seen when forcing that path in-process).
 #include "hook.h"
 
 #include <tlhelp32.h>
-#include <winternl.h>
 
 #include <cstdio>
 #include <cstring>
@@ -40,6 +39,7 @@ SetWindowLongW_t g_SetWindowLongW = nullptr;
 HWND g_main_window = nullptr;
 bool g_forced_main_window = false;
 bool g_override_next_setwindowpos = false;
+bool g_windowed_launch = false;
 
 bool IsGameWindowClass(const char* class_name) {
     return class_name && _stricmp(class_name, "MechWarrior Mercenaries") == 0;
@@ -47,6 +47,11 @@ bool IsGameWindowClass(const char* class_name) {
 
 bool IsGameWindowClassW(const wchar_t* class_name) {
     return class_name && _wcsicmp(class_name, L"MechWarrior Mercenaries") == 0;
+}
+
+bool CommandLineHasWindowSwitch() {
+    const wchar_t* command_line = GetCommandLineW();
+    return command_line && wcsstr(command_line, L"-window") != nullptr;
 }
 
 void LogRect(const char* label, HWND hwnd) {
@@ -84,8 +89,7 @@ void RegisterMainWindow(HWND hwnd, bool forced) {
     Log("main window: hwnd=%p title=\"%s\"\n", hwnd, title);
     LogRect("main window after creation", hwnd);
 
-    // The game's -window placement can land partly off-screen. Center the
-    // outer window on the primary work area after creation.
+    // Center the outer window on the primary work area.
     RECT work{};
     RECT window{};
     if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0) &&
@@ -105,15 +109,11 @@ HWND WINAPI Hook_CreateWindowExA(DWORD ex_style, LPCSTR class_name,
                                  int width, int height, HWND parent, HMENU menu,
                                  HINSTANCE instance, LPVOID param) {
     const Config& config = GetConfig();
-    bool forcing = config.window_enabled && !g_forced_main_window &&
-                   parent == nullptr && IsGameWindowClass(class_name);
+    bool forcing = config.window_enabled && g_windowed_launch &&
+                   !g_forced_main_window && parent == nullptr &&
+                   IsGameWindowClass(class_name);
 
     if (forcing) {
-        if (config.force_windowed) {
-            style &= ~static_cast<DWORD>(WS_POPUP);
-            style |= WS_OVERLAPPEDWINDOW;
-            Log("windowed: forced overlapped style 0x%08lX\n", style);
-        }
         int outer_w = 0;
         int outer_h = 0;
         OuterSizeForClient(style, menu != nullptr, config.window_width,
@@ -142,15 +142,11 @@ HWND WINAPI Hook_CreateWindowExW(DWORD ex_style, LPCWSTR class_name,
                                  int width, int height, HWND parent, HMENU menu,
                                  HINSTANCE instance, LPVOID param) {
     const Config& config = GetConfig();
-    bool forcing = config.window_enabled && !g_forced_main_window &&
-                   parent == nullptr && IsGameWindowClassW(class_name);
+    bool forcing = config.window_enabled && g_windowed_launch &&
+                   !g_forced_main_window && parent == nullptr &&
+                   IsGameWindowClassW(class_name);
 
     if (forcing) {
-        if (config.force_windowed) {
-            style &= ~static_cast<DWORD>(WS_POPUP);
-            style |= WS_OVERLAPPEDWINDOW;
-            Log("windowed: forced overlapped style (W) 0x%08lX\n", style);
-        }
         int outer_w = 0;
         int outer_h = 0;
         OuterSizeForClient(style, menu != nullptr, config.window_width,
@@ -176,28 +172,9 @@ BOOL WINAPI Hook_SetWindowPos(HWND hwnd, HWND after, int x, int y, int cx, int c
         Log("SetWindowPos main=%p size=%dx%d flags=0x%04X\n", hwnd, cx, cy, flags);
     }
 
-    if (hwnd == g_main_window && config.force_windowed) {
-        int outer_w = 0;
-        int outer_h = 0;
-        OuterSizeForClient(GetWindowLongA(hwnd, GWL_STYLE), FALSE,
-                           config.window_width, config.window_height, &outer_w,
-                           &outer_h);
-        const bool size_requested = !(flags & SWP_NOSIZE) && cx > 0 && cy > 0;
-        if (!size_requested || cx != outer_w || cy != outer_h ||
-            (flags & SWP_NOMOVE)) {
-            RECT work{};
-            SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
-            x = work.left + ((work.right - work.left) - outer_w) / 2;
-            y = work.top + ((work.bottom - work.top) - outer_h) / 2;
-            cx = outer_w;
-            cy = outer_h;
-            flags &= ~static_cast<UINT>(SWP_NOSIZE | SWP_NOMOVE);
-            Log("windowed: forced SetWindowPos %dx%d at %d,%d flags=0x%04X\n",
-                cx, cy, x, y, flags);
-        }
-    } else if (hwnd == g_main_window && g_override_next_setwindowpos &&
-               config.window_enabled && !(flags & SWP_NOSIZE) && cx > 0 &&
-               cy > 0) {
+    if (hwnd == g_main_window && g_windowed_launch &&
+        g_override_next_setwindowpos && config.window_enabled &&
+        !(flags & SWP_NOSIZE) && cx > 0 && cy > 0) {
         int outer_w = 0;
         int outer_h = 0;
         OuterSizeForClient(GetWindowLongA(hwnd, GWL_STYLE), FALSE,
@@ -241,12 +218,6 @@ BOOL WINAPI Hook_ShowWindow(HWND hwnd, int cmd) {
 }
 
 LONG WINAPI Hook_SetWindowLongA(HWND hwnd, int index, LONG value) {
-    const Config& config = GetConfig();
-    if (config.force_windowed && hwnd == g_main_window && index == GWL_STYLE) {
-        LONG forced = (value & ~static_cast<LONG>(WS_POPUP)) | WS_OVERLAPPEDWINDOW;
-        Log("windowed: SetWindowLongA style 0x%08lX -> 0x%08lX\n", value, forced);
-        value = forced;
-    }
     if (hwnd == g_main_window || index == GWL_STYLE || index == GWL_EXSTYLE) {
         Log("SetWindowLongA hwnd=%p index=%d value=0x%08lX\n", hwnd, index, value);
     }
@@ -254,12 +225,6 @@ LONG WINAPI Hook_SetWindowLongA(HWND hwnd, int index, LONG value) {
 }
 
 LONG WINAPI Hook_SetWindowLongW(HWND hwnd, int index, LONG value) {
-    const Config& config = GetConfig();
-    if (config.force_windowed && hwnd == g_main_window && index == GWL_STYLE) {
-        LONG forced = (value & ~static_cast<LONG>(WS_POPUP)) | WS_OVERLAPPEDWINDOW;
-        Log("windowed: SetWindowLongW style 0x%08lX -> 0x%08lX\n", value, forced);
-        value = forced;
-    }
     if (hwnd == g_main_window || index == GWL_STYLE || index == GWL_EXSTYLE) {
         Log("SetWindowLongW hwnd=%p index=%d value=0x%08lX\n", hwnd, index, value);
     }
@@ -268,142 +233,83 @@ LONG WINAPI Hook_SetWindowLongW(HWND hwnd, int index, LONG value) {
 
 }  // namespace
 
+void RelaunchWindowed() {
+    const Config& config = GetConfig();
+    if (!config.relaunch) {
+        g_windowed_launch = CommandLineHasWindowSwitch();
+        return;
+    }
+    if (CommandLineHasWindowSwitch()) {
+        g_windowed_launch = true;
+        Log("windowed: -window present\n");
+        return;
+    }
+
+    std::wstring command_line = GetCommandLineW();
+    command_line += L" -window";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (CreateProcessW(nullptr, &command_line[0], nullptr, nullptr, FALSE, 0,
+                       nullptr, nullptr, &startup, &process)) {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        Log("windowed: relaunching with -window\n");
+        TerminateProcess(GetCurrentProcess(), 0);
+        return;
+    }
+    Log("windowed: relaunch failed (%lu); leaving fullscreen path\n",
+        GetLastError());
+    g_windowed_launch = false;
+}
+
 namespace {
 
 int g_hooked_count = 0;
 bool g_count_hooks = false;
 
-void HookOne(HMODULE module, const char* dll_name, const wchar_t* module_name,
-             const char* name, void* detour, void** original) {
-    HMODULE target_module = GetModuleHandleW(module_name);
-    if (!target_module) {
+void HookOne(HMODULE module, const char* name, void* detour, void** original) {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) {
         return;
     }
-    void* target = reinterpret_cast<void*>(GetProcAddress(target_module, name));
+    void* target = reinterpret_cast<void*>(GetProcAddress(user32, name));
     if (!target) {
         return;
     }
     void* previous = *original;
-    PatchIatByAddress(module, dll_name, target_module, target, detour, original);
+    PatchIatByAddress(module, "USER32.dll", user32, target, detour, original);
     if (g_count_hooks && previous == nullptr && *original != nullptr) {
         ++g_hooked_count;
     }
 }
 
 void HookWindowModule(HMODULE module) {
-    HookOne(module, "USER32.dll", L"user32.dll", "CreateWindowExA",
+    HookOne(module, "CreateWindowExA",
             reinterpret_cast<void*>(&Hook_CreateWindowExA),
             reinterpret_cast<void**>(&g_CreateWindowExA));
-    HookOne(module, "USER32.dll", L"user32.dll", "CreateWindowExW",
+    HookOne(module, "CreateWindowExW",
             reinterpret_cast<void*>(&Hook_CreateWindowExW),
             reinterpret_cast<void**>(&g_CreateWindowExW));
-    HookOne(module, "USER32.dll", L"user32.dll", "SetWindowPos",
-            reinterpret_cast<void*>(&Hook_SetWindowPos),
+    HookOne(module, "SetWindowPos", reinterpret_cast<void*>(&Hook_SetWindowPos),
             reinterpret_cast<void**>(&g_SetWindowPos));
-    HookOne(module, "USER32.dll", L"user32.dll", "AdjustWindowRect",
+    HookOne(module, "AdjustWindowRect",
             reinterpret_cast<void*>(&Hook_AdjustWindowRect),
             reinterpret_cast<void**>(&g_AdjustWindowRect));
-    HookOne(module, "USER32.dll", L"user32.dll", "AdjustWindowRectEx",
+    HookOne(module, "AdjustWindowRectEx",
             reinterpret_cast<void*>(&Hook_AdjustWindowRectEx),
             reinterpret_cast<void**>(&g_AdjustWindowRectEx));
-    HookOne(module, "USER32.dll", L"user32.dll", "ShowWindow",
-            reinterpret_cast<void*>(&Hook_ShowWindow),
+    HookOne(module, "ShowWindow", reinterpret_cast<void*>(&Hook_ShowWindow),
             reinterpret_cast<void**>(&g_ShowWindow));
-    HookOne(module, "USER32.dll", L"user32.dll", "SetWindowLongA",
+    HookOne(module, "SetWindowLongA",
             reinterpret_cast<void*>(&Hook_SetWindowLongA),
             reinterpret_cast<void**>(&g_SetWindowLongA));
-    HookOne(module, "USER32.dll", L"user32.dll", "SetWindowLongW",
+    HookOne(module, "SetWindowLongW",
             reinterpret_cast<void*>(&Hook_SetWindowLongW),
             reinterpret_cast<void**>(&g_SetWindowLongW));
 }
 
 }  // namespace
-
-void InstallCommandLineHooks() {
-    if (!GetConfig().force_windowed) {
-        return;
-    }
-    auto* peb = NtCurrentTeb()->ProcessEnvironmentBlock;
-    if (!peb || !peb->ProcessParameters) {
-        Log("command line: PEB unavailable\n");
-        return;
-    }
-    UNICODE_STRING& command_line = peb->ProcessParameters->CommandLine;
-    if (!command_line.Buffer || command_line.Length == 0) {
-        Log("command line: empty\n");
-        return;
-    }
-
-    std::wstring current(command_line.Buffer,
-                         command_line.Length / sizeof(wchar_t));
-    if (current.find(L"-window") != std::wstring::npos) {
-        Log("command line: -window already present\n");
-        return;
-    }
-
-    std::wstring updated = current + L" -window";
-    USHORT new_length =
-        static_cast<USHORT>(updated.size() * sizeof(wchar_t));
-    USHORT new_max = static_cast<USHORT>(new_length + sizeof(wchar_t));
-    if (new_max <= command_line.MaximumLength && command_line.Buffer) {
-        memcpy(command_line.Buffer, updated.c_str(), new_max);
-    } else {
-        auto* buffer = static_cast<wchar_t*>(
-            HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, new_max));
-        if (!buffer) {
-            Log("command line: allocation failed\n");
-            return;
-        }
-        memcpy(buffer, updated.c_str(), new_max);
-        command_line.Buffer = buffer;
-        command_line.MaximumLength = new_max;
-    }
-    command_line.Length = new_length;
-    Log("command line: appended -window: %ls\n", updated.c_str());
-}
-
-void MaintainWindow() {
-    const Config& config = GetConfig();
-    if (!config.force_windowed || !config.window_enabled || !g_main_window) {
-        return;
-    }
-    HWND hwnd = g_main_window;
-
-    LONG style = GetWindowLongA(hwnd, GWL_STYLE);
-    bool style_changed = false;
-    if (config.force_windowed && (style & WS_POPUP)) {
-        style = (style & ~static_cast<LONG>(WS_POPUP)) | WS_OVERLAPPEDWINDOW;
-        SetWindowLongA(hwnd, GWL_STYLE, style);
-        style_changed = true;
-    }
-
-    RECT client{};
-    GetClientRect(hwnd, &client);
-    const int client_w = client.right - client.left;
-    const int client_h = client.bottom - client.top;
-    if (client_w == config.window_width && client_h == config.window_height &&
-        !style_changed) {
-        return;
-    }
-
-    int outer_w = 0;
-    int outer_h = 0;
-    OuterSizeForClient(style, FALSE, config.window_width, config.window_height,
-                       &outer_w, &outer_h);
-    RECT work{};
-    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
-    const int x = work.left + ((work.right - work.left) - outer_w) / 2;
-    const int y = work.top + ((work.bottom - work.top) - outer_h) / 2;
-    SetWindowPos(hwnd, nullptr, x, y, outer_w, outer_h,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-
-    static int restores = 0;
-    if (restores < 5) {
-        ++restores;
-        Log("maintain: restored window to %dx%d client at %d,%d\n",
-            config.window_width, config.window_height, x, y);
-    }
-}
 
 int InstallWindowHooks() {
     HMODULE exe = GetModuleHandleW(nullptr);
