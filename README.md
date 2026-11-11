@@ -57,7 +57,7 @@ baseline this repository will verify against.
 | `docs/PATCHING.md` | Legacy MTX format, why it is unreliable, and the modern replacement plan |
 | `docs/REBIRTH.md` | Public status of MekTek Rebirth, including the Phase 2 claim |
 | `docs/ROADMAP.md` | Milestones and non-goals |
-| `manifests/` | Small known-good hash manifests |
+| `manifests/` | Known-good core and full hash manifests |
 | `templates/options.ini` | Known-good display/configuration template |
 | `tools/` | PowerShell inspection, verification, and config-repair tools |
 
@@ -84,6 +84,14 @@ Verify the core files:
 pwsh ./tools/Test-Mw4Manifest.ps1 `
   -Install "MekTek/Mechwarrior Mercenaries - Mektek Mekpak" `
   -Manifest "manifests/mw4-mercs-3.1c-core.sha256"
+```
+
+Verify the full baseline (1,716 distribution files):
+
+```powershell
+pwsh ./tools/Test-Mw4Manifest.ps1 `
+  -Install "MekTek/Mechwarrior Mercenaries - Mektek Mekpak" `
+  -Manifest "manifests/mw4-mercs-3.1c-full.sha256"
 ```
 
 Generate a full manifest for a clean install:
