@@ -245,12 +245,12 @@ mw4patch.exe                  user-facing installer/patcher
   - verifies game hashes
   - backs up options.ini
   - writes known-good config
-  - installs version.dll proxy / mw4hook.dll
+  - installs ddraw.dll proxy / mw4hook.dll
   - creates a windowed shortcut with -window
   - records installed files and hashes
   - supports uninstall/rollback
 
-version.dll / mw4hook.dll      native runtime hook
+ddraw.dll / mw4hook.dll        native runtime hook
   - loaded by MW4Mercs.exe
   - pattern-scans the 3.1c binary
   - hooks display/window, mouse input, menu dispatch, imagehlp
@@ -258,8 +258,13 @@ version.dll / mw4hook.dll      native runtime hook
   - does not modify AntiHack
 ```
 
+> **Loading note (measured):** the supported 3.1c executable is PECompact
+> packed and does not load a local `version.dll`. It does load a local
+> `ddraw.dll` from its application directory, so the development hook uses a
+> `ddraw.dll` proxy. See `docs/HOOK.md`.
+
 The DX11 Renderer Overhaul mod is a **behavior reference** for the desired fixes
-and for the `version.dll` loading approach. It is not source code and must not
+and for the proxy-DLL loading approach. It is not source code and must not
 be copied or redistributed.
 
 ## 6. References
@@ -272,12 +277,17 @@ be copied or redistributed.
 | `docs/PATCHING.md` | MTX ZIP layout, why the old patcher is unreliable |
 | `docs/REBIRTH.md` | Rebirth status and the unverified Phase 2 claim |
 | `docs/ROADMAP.md` | Milestones and non-goals |
+| `docs/HOOK.md` | Development `ddraw.dll` hook: windowed 1024x768 and limitations |
 | `manifests/` | Core and full hash manifests |
 | `templates/options.ini` | Known-good configuration template |
+| `src/hook/` | Native ddraw proxy and window/resolution hooks |
 | `tools/Get-Mw4InstallInfo.ps1` | Identify a build and validate options.ini |
 | `tools/Test-Mw4Manifest.ps1` | Verify files against a manifest |
 | `tools/Repair-Mw4Config.ps1` | Write a safe options.ini with backup |
 | `tools/New-Mw4Manifest.ps1` | Generate a full manifest |
+| `tools/Set-Mw4Hook.ps1` | Install/remove the development hook in a test install |
+| `tools/Start-Mw4Windowed.ps1` | Launch `MW4Mercs.exe -window` |
+| `tools/Set-Mw4IntroSkip.ps1` | Test-only FMV intro skip using `CEmpty.mpg` |
 
 ### Local decompilation reference
 
@@ -394,13 +404,24 @@ High-value files:
 - `-window` switch confirmed.
 - Windowed mode tested: it ignores requested resolution and uses 800x600.
 - Rebirth Phase 2 claim reviewed and marked unverified.
+- Native hook implemented as a `ddraw.dll` proxy. A `version.dll` proxy does
+  not load in the packed 3.1c executable; the game does load a local
+  `ddraw.dll` (verified via the process module list).
+- The main window is forced to a 1024x768 client area; `SetWindowPos` resize is
+  redirected once so the game does not snap back to 800x600.
+- The game's built-in 800x600 display defaults and windowed-mode pushes are
+  patched in memory; `MW4Mercs.exe` is unchanged on disk.
+- The hook reaches the main menu and remains responsive. Test-only intro-skip
+  and window-inspection helpers were added.
+- The process window/display path is documented in `docs/HOOK.md`.
 
 ### Open
 
-- Choose the native hook implementation (C++ `version.dll` proxy vs. injected
-  DLL vs. launcher-side wrapper).
-- Determine whether the window can be resized after creation or whether the
-  display-mode creation path must be hooked.
+- Fix the frontend rendering size: the 2002 shell still draws into an 800x600
+  buffer inside the 1024x768 window (black/garbage border).
+- Verify in-mission rendering at 1024x768.
+- Retest the in-game Options > Resolution menu with the hook active.
+- Test AntiHack and multiplayer integrity with the `ddraw.dll` proxy present.
 - Map the retail oracle functions to the 3.1c binary with pattern scanning.
 - Find the exact 3.1c mouse aim/dead-zone code and the leg-turn mouse lock.
 - Determine what causes the Windows-scaling torso drift.
@@ -414,6 +435,11 @@ High-value files:
   1600x1200.
 - Confirm the WASD throttle-decay design and whether it belongs in the same
   hook as the input fixes.
+- Decide whether an in-game "Windowed" checkbox is worth adding. The Video
+  tab is built from packed `content\Interfaces\Common\*interface.control`
+  data inside `RESOURCE\core.mw4`, not from loose files, so adding a control
+  requires unpacking/repacking the archive and wiring a shell-script callback.
+  A launcher-side windowed option is the smaller first step.
 
 ## 10. Definition of done for the first release
 

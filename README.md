@@ -145,6 +145,18 @@ pwsh ./tools/Repair-Mw4Config.ps1 `
 
 The script backs up the existing `options.ini` before writing a new one.
 
+### Development hook: windowed 1024x768
+
+A first native hook is in `src/hook/`. It is a `ddraw.dll` proxy that:
+
+- starts `MW4Mercs.exe -window` in a 1024x768 client-area window
+- rewrites the game's built-in 800x600 display defaults in memory
+- does not modify `MW4Mercs.exe` on disk
+
+Build and test instructions are in `docs/HOOK.md`. This is a development
+implementation, not the final patcher, and the original frontend still draws
+at 800x600 inside the larger window (see known limitations in that document).
+
 ## Hardware Error troubleshooting
 
 A common cause of this dialog:
@@ -185,11 +197,13 @@ This is a gameplay/input change and is not part of the first release.
 |---|---|
 | `AGENTS.md` | Agent/contributor guide, release scope, technical references |
 | `docs/BASELINE.md` | Supported build identity, hashes, known-good configuration |
+| `docs/HOOK.md` | Development `ddraw.dll` hook: windowed 1024x768 implementation and limitations |
 | `docs/PATCHING.md` | Legacy patch format and modern patching plan |
 | `docs/ROADMAP.md` | Milestones and non-goals |
 | `manifests/` | Core and full SHA-256 baselines |
+| `src/hook/` | Native `ddraw.dll` proxy and Win32/display hooks |
 | `templates/` | Known-good configuration template |
-| `tools/` | Inspect, verify, repair, and manifest scripts |
+| `tools/` | Inspect, verify, repair, window-test, and manifest scripts |
 
 ## Development
 
