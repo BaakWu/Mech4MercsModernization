@@ -450,6 +450,12 @@ High-value files:
   - 16-bit requests and the fullscreen 16-bit fallbacks are raised to 32-bit.
   - Verified in-process from a fresh extraction; AntiHack/multiplayer, audio
     and the 100-cycle test are still open (`docs/KNOWN-ISSUES.md`).
+- Mission frame rate and garbled audio fixed (2026-11-16): a failing
+  `IDirect3DDevice7::Clear` made GameOS rebuild its display setup every frame
+  (stock game too); the ddraw proxy retries the Clear. 9-17 fps -> 110-150
+  fps in a campaign mission. The 16-bit depth-buffer fallback is replaced by
+  24-bit depth. Windows on a non-main monitor no longer freeze. Mission
+  terrain artifacts remain open (`docs/KNOWN-ISSUES.md`).
 - `MW4Mercs.exe` is unchanged on disk; all code changes are in memory and
   located by unique byte patterns (the old fixed 800x600 immediate patches
   were removed; one of them also turned the 800x600 menu entry into 1024x768).

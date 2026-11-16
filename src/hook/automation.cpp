@@ -15,6 +15,8 @@
 //   key   <vk>          press a virtual key (decimal or 0x hex)
 //   activate            post WM_ACTIVATEAPP/WM_ACTIVATE to the game window
 //   setwindowed <0|1>   call the Windowed backend directly (diagnostics)
+//   altenter            post Alt+Enter to the window procedure
+//   movewin <x> <y>     move the window (screen coordinates), e.g. to another monitor
 //   wait  <ms>
 //   shot  <file.bmp>    ask the ddraw proxy to save the next presented frame
 //   log   <text>
@@ -150,6 +152,17 @@ void Execute(const std::string& line) {
             const LPARAM down = 1 | (0x1C << 16) | (1 << 29);
             PostMessageA(hwnd, WM_SYSKEYDOWN, VK_RETURN, down);
             PostMessageA(hwnd, WM_SYSKEYUP, VK_RETURN, down | 0xC0000000);
+        }
+        Sleep(300);
+    } else if (_stricmp(verb, "movewin") == 0) {
+        // Move the window's top-left corner to screen x,y (e.g. onto another
+        // monitor), as a drag would.
+        int x = 0;
+        int y = 0;
+        sscanf_s(rest, "%d %d", &x, &y);
+        HWND hwnd = MainWindow();
+        if (hwnd) {
+            SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
         }
         Sleep(300);
     } else if (_stricmp(verb, "setwindowed") == 0) {

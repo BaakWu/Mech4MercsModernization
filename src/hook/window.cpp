@@ -22,6 +22,7 @@
 // (same path as the checkbox) and GameOS' own toggle never runs.
 #include "hook.h"
 
+#include <intrin.h>
 #include <tlhelp32.h>
 
 #include <cstdio>
@@ -186,7 +187,14 @@ void ApplyLayout(HWND hwnd, HWND after, UINT flags) {
     g_SetWindowPos(hwnd, after, layout.rect.left, layout.rect.top,
                    layout.rect.right - layout.rect.left,
                    layout.rect.bottom - layout.rect.top, flags);
-    LogRect(DesiredWindowed() ? "main window (windowed)" : "main window (borderless)", hwnd);
+    // Log only changes; GameOS re-applies its window size often.
+    static RECT logged = {};
+    static DWORD logged_style = 0;
+    if (!EqualRect(&logged, &layout.rect) || logged_style != layout.style) {
+        logged = layout.rect;
+        logged_style = layout.style;
+        LogRect(DesiredWindowed() ? "main window (windowed)" : "main window (borderless)", hwnd);
+    }
 }
 
 HWND WINAPI Hook_CreateWindowExA(DWORD ex_style, LPCSTR class_name,
@@ -221,6 +229,25 @@ HWND WINAPI Hook_CreateWindowExA(DWORD ex_style, LPCSTR class_name,
 
 BOOL WINAPI Hook_SetWindowPos(HWND hwnd, HWND after, int x, int y, int cx, int cy,
                               UINT flags) {
+    if (hwnd == g_main_window) {
+        static void* callers[8] = {};
+        static unsigned counts[8] = {};
+        void* caller = _ReturnAddress();
+        for (int i = 0; i < 8; ++i) {
+            if (!callers[i] || callers[i] == caller) {
+                callers[i] = caller;
+                const unsigned n = ++counts[i];
+                // GameOS calls this from its display setup; a count that keeps
+                // doubling means the setup is being re-run (see Clear fix in
+                // ddraw_proxy.cpp).
+                if ((n & (n - 1)) == 0) {
+                    Log("SetWindowPos(main) from %p: %d,%d %dx%d flags=0x%X (call %u)\n", caller,
+                        x, y, cx, cy, flags, n);
+                }
+                break;
+            }
+        }
+    }
     if (hwnd == g_main_window && GetConfig().window_enabled && !GameFullscreen() &&
         !(flags & SWP_NOSIZE) && cx > 0 && cy > 0) {
         // GameOS' windowed setup sizes the window to its render size (800x600

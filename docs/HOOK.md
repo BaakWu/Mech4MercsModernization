@@ -102,6 +102,40 @@ and hit-tests in render pixels, so `cursor.cpp` maps the visible position from
 the viewport into the picture's pixels (`SetCursorPos` gets the inverse).
 Unscaled frames leave the cursor untouched.
 
+A window that is not entirely on the main monitor is presented through the
+window's own DC instead of the primary surface: the DirectDraw primary
+surface only covers the main monitor, so a window dragged to another monitor
+used to freeze (the game kept running behind a stale picture).
+
+### Direct3D: per-frame display rebuild, depth buffer
+
+Found 2026-11-16 by A/B with all display features disabled (the stock game
+behaves the same):
+
+- **Per-frame rebuild (frame rate, garbled audio).** GameOS clears through a
+  wrapper (`0x00742EF0`, calls `IDirect3DDevice7::Clear`); its viewport setup
+  (`0x00716230`) re-runs the **whole windowed DirectDraw/Direct3D setup**
+  (`call 0x0070FB90` at `0x00716355`) whenever that Clear fails. GameOS
+  renders some 3D elements into a 256x256 texture that has no depth buffer
+  and asks to clear depth there; current Direct3D 7 returns
+  `D3DERR_ZBUFFER_NOTPRESENT` (`0x88760816`), so the display was rebuilt
+  every frame in missions and in the 3D campaign screens. Measured in the
+  campaign mission Tharkad - Checkmate: 9-17 fps before, 110-150 fps after;
+  the stalls also starved streaming audio. The ddraw proxy hooks
+  `IDirect3DDevice7::Clear` (reached via `IDirectDraw7::QueryInterface(
+  IID_IDirect3D7)` -> `IDirect3D7::CreateDevice`, vtable slot 10) and, when a
+  Clear fails, retries without the stencil flag and then target-only; a
+  depth-only Clear on a target without depth is a no-op. `[display]
+  clear_fix=0` disables it.
+- **Depth buffer precision.** GameOS first asks for a 32-bit depth buffer with
+  the Z bits in the high 24 bits (`dwZBitMask 0xFFFFFF00`, 8 stencil bits).
+  Current drivers only offer the standard layout (`0x00FFFFFF`), so the
+  request fails with `E_NOTIMPL` and GameOS falls back to **16-bit** depth.
+  The proxy retries the failed request as standard D24S8 (or D24X8 if no
+  stencil was asked for) and reports the created format back. `[display]
+  zbuffer_fix=0` disables it. This did **not** remove the flat translucent
+  terrain sheets seen in missions (`docs/KNOWN-ISSUES.md`).
+
 ### Selected resolution
 
 The Resolution dropdown is filled by `ShellGetSupportedResolutions` from a
@@ -144,6 +178,12 @@ game's handler sees it.
 | `#VBD` member fetch | `0x00419150` | 7-byte detour |
 | fullscreen 16-bit (renderer path) | `0x0070FECC` | `0x10` -> `0x20` |
 | fullscreen 16-bit (last resort) | `0x007100F0`, `0x007100FA` | `0x10` -> `0x20` |
+| `IDirect3DDevice7::Clear` | ddraw.dll vtable slot 10 | retry failed Clear without stencil / depth |
+| `IDirectDraw7::CreateSurface` | ddraw.dll vtable slot 6 | retry failed 32-bit depth request as D24S8/D24X8 |
+| `IDirectDrawSurface7::Blt` | ddraw.dll vtable slot 5 | present scaling; window DC off the main monitor |
+
+The last three are COM vtable hooks inside the `ddraw.dll` proxy; nothing in
+`MW4Mercs.exe` is patched for them.
 
 The globals the hook reads (fullscreen flag `0x0124067C`, bpp `0x01240670`,
 device `0x01240674`, resolution table, selected size) are taken from operands
@@ -159,11 +199,17 @@ relaunch=1    ; relaunch once if -window is missing
 [display]
 enabled=1     ; mission size, 32-bit, never exclusive fullscreen
 checkbox=1    ; add the Windowed checkbox to Options > Video
+clear_fix=1   ; (default, not in the shipped ini) stop the per-frame rebuild
+zbuffer_fix=1 ; (default, not in the shipped ini) 24-bit depth instead of 16
 [frontend]
 stretch=1     ; scale the picture into the window
 [log]
 enabled=1     ; mw4hook-<pid>.log and mw4hook-ddraw-<pid>.log
 ```
+
+`mw4hook-ddraw-<pid>.log` records the present rate every 5 seconds
+(`present: N fps, blit avg/max, longest gap`), failed Clears and depth-buffer
+creation; useful in player bug reports.
 
 Development only (not shipped):
 
