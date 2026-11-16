@@ -17,34 +17,23 @@ MechWarrior 4: Mercenaries was built for DirectX 7, 32-bit Windows, and display
 hardware from 2002. On modern systems it can fail in ways that look like
 hardware incompatibility but are often configuration or compatibility bugs.
 
-The project’s first release focuses on the problems that matter most for
-getting the game running properly:
+The first release is a **windowed-mode patch**:
 
-- launch in **windowed mode at 1024x768**
+- a **Windowed** checkbox in Options > Video: a window at the chosen
+  resolution, or borderless fullscreen on the main monitor (Alt+Enter toggles)
 - keep the **in-game Options > Resolution controls working**
-- smooth **mouse aiming** at any frame rate
-- fix the mouse **sticking while the legs follow the torso**
-- fix **torso drift** when Windows display scaling is above 100%
-- make menu buttons accept the **first click**
-- start on the **main monitor** without a black screen until clicked
-- fix **texture mipmap corruption** when a second video card is configured
-- fix crashes involving the outdated **`imagehlp.dll`** path
-- fix the **menu message-dispatch crash**
-- prevent a failed mode switch from leaving the game in **16-bit color**
+- always **32-bit color**, never a 16-bit fallback
+- correct mouse and display behavior with Windows display scaling above 100%
 - keep the game’s **AntiHack active and untouched**
+
+Making windowed mode usable also fixed four bugs that are in the stock game on
+current Windows: low mission frame rate, garbled audio, see-through terrain,
+and a window that froze on a second monitor. See `docs/HOOK.md`.
 
 The first release does **not** replace the renderer, reimplement the engine, or
 change the single-player campaign.
 
-### Fix reference, not a renderer replacement
-
-The compatibility fixes in this project are based on the behavior documented by
-the **DX11 Renderer Overhaul** mod:
-
-<https://www.moddb.com/mods/mw4-mercenaries-dx11-renderer-overhaul>
-
-That project is a **behavior reference for its fixes only**. We are not
-adopting its renderer or any of its visual changes.
+### Not a renderer replacement
 
 The game must continue to look like the original 2002 release:
 
@@ -56,24 +45,8 @@ The game must continue to look like the original 2002 release:
 - no 64-channel audio change
 
 The only display change in the first release is compatibility-oriented:
-windowed 1024x768 plus a working in-game resolution menu. That is not a visual
-overhaul.
-
-| Fix demonstrated by the reference mod | Adopted? |
-|---|---|
-| Mouse aiming dead-zone fix | **Yes** |
-| Mouse no longer sticks while the legs follow the torso | **Yes** |
-| Torso drift with Windows display scaling above 100% | **Yes** |
-| Menu buttons accept the first click; quick second click is not lost | **Yes** |
-| Start on the main monitor without a black screen until clicked | **Yes** |
-| Texture mipmap garbage when a second video card is configured | **Yes** |
-| Crashes from the outdated `imagehlp.dll` path | **Yes** |
-| Menu message-dispatch crash | **Yes** |
-| Failed mode switch leaving the game in 16-bit color | **Yes** |
-| AntiHack left active and untouched | **Yes** |
-| DX11 renderer, HDR, TAA, shadows, water, terrain, textures, sky, models | **No** |
-| Widescreen/ultrawide/FOV/HUD changes | **No** |
-| 64-channel audio change | **No** |
+windowed or borderless play at the chosen resolution, with the original 4:3
+picture scaled to fit. That is not a visual overhaul.
 
 ## Planned user experience
 
@@ -145,18 +118,22 @@ pwsh ./tools/Repair-Mw4Config.ps1 `
 
 The script backs up the existing `options.ini` before writing a new one.
 
-### Development hook: windowed 1024x768
+### Runtime hook: windowed mode
 
-A first native hook is in `src/hook/`. It is a `dinput.dll` proxy that:
+The native hook in `src/hook/` is a `dinput.dll` proxy plus a `ddraw.dll`
+proxy. Together they:
 
-- starts `MW4Mercs.exe -window` in a 1024x768 client-area window
-- relaunches a raw `MW4Mercs.exe` launch with `-window` before the game starts
-- rewrites the game's built-in 800x600 display defaults in memory
-- does not modify `MW4Mercs.exe` on disk
+- add the **Windowed** checkbox to Options > Video and apply it instantly
+  (framed window or borderless fullscreen; Alt+Enter toggles)
+- run missions at the chosen resolution and scale the 800x600 menus, MechLab
+  and movies into the window with the 4:3 shape kept
+- relaunch a raw `MW4Mercs.exe` launch with `-window` before the game starts
+- fix the per-frame display rebuild (frame rate, audio), the unbound depth
+  buffer (see-through terrain) and the frozen window on a second monitor
+- do not modify `MW4Mercs.exe` or any game file on disk
 
-Build and test instructions are in `docs/HOOK.md`. This is a development
-implementation, not the final patcher, and the original frontend still draws
-at 800x600 inside the larger window (see known limitations in that document).
+Build, test and technical details are in `docs/HOOK.md`; open problems are in
+`docs/KNOWN-ISSUES.md`.
 
 ### Development patcher
 
@@ -194,9 +171,9 @@ Try `tools/Repair-Mw4Config.ps1` before assuming the GPU is unsupported. The
 script writes a non-zero resolution, 32-bit color, and a valid video driver
 index.
 
-Note: the base game’s `-window` switch currently opens an 800x600 window
-regardless of the configured resolution. The first patch release is intended
-to fix that; configuration alone is not enough.
+Note: the base game’s `-window` switch opens an 800x600 window regardless of
+the configured resolution; configuration alone cannot change that. The runtime
+hook does.
 
 ## Backlog
 
@@ -215,7 +192,8 @@ This is a gameplay/input change and is not part of the first release.
 |---|---|
 | `AGENTS.md` | Agent/contributor guide, release scope, technical references |
 | `docs/BASELINE.md` | Supported build identity, hashes, known-good configuration |
-| `docs/HOOK.md` | Development `dinput.dll` hook: windowed 1024x768 implementation and limitations |
+| `docs/HOOK.md` | Runtime hook: windowed mode, Windowed checkbox, Direct3D fixes |
+| `docs/KNOWN-ISSUES.md` | Problems found in play testing and their status |
 | `docs/PATCHER.md` | Development `mw4patch.exe`: verification, install, backups, uninstall |
 | `docs/PATCHING.md` | Legacy patch format and modern patching plan |
 | `docs/ROADMAP.md` | Milestones and non-goals |
@@ -245,7 +223,7 @@ Before working on binary behavior, read `AGENTS.md`. In particular:
 
 Good contributions at this stage:
 
-- reproducing modern-Windows launch and input bugs
+- testing windowed and borderless play on different GPUs and monitor setups
 - testing the existing configuration repair on different GPUs and display
   layouts
 - documenting exact game versions and hashes
@@ -261,10 +239,9 @@ See `docs/ROADMAP.md` for the milestone plan. The short version:
 
 1. Verify the baseline and fix configuration. **Done.**
 2. Build the `mw4patch.exe` scaffold and release pipeline.
-3. Implement windowed 1024x768 and display fixes.
-4. Implement mouse, menu, and crash fixes.
-5. Add optional WASD throttle-decay controls.
-6. Ship a single reversible patch executable.
+3. Implement windowed mode and the Windowed checkbox. **Done.**
+4. Add optional WASD throttle-decay controls.
+5. Ship a single reversible patch executable.
 
 ## Legal
 

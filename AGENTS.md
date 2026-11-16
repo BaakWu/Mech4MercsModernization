@@ -111,13 +111,12 @@ parts disabled before release.
 12. **MekTek AntiHack must remain active and untouched.**
 
 These are **compatibility and behavior fixes only**. The game must continue to
-look like the original 2002 release. The DX11 Renderer Overhaul is a behavior
-reference for these fixes, not a rendering target.
+look like the original 2002 release.
 
 #### Visual fidelity (non-negotiable)
 
-Do **not** adopt the DX11 Renderer Overhaul's rendering pipeline or visual
-changes. In particular, do not add or replace:
+Do **not** add a new rendering pipeline or visual changes. In particular, do
+not add or replace:
 
 - the DirectX 7 renderer with DX11, Vulkan, or another rendering backend
 - deferred/HDR rendering, tonemapping, bloom, TAA, HBAO, or baked GI
@@ -275,10 +274,6 @@ dinput.dll / mw4hook.dll        native runtime hook
 > a process started without `-window` and the patched shortcuts pass the switch
 > directly. See `docs/HOOK.md`.
 
-The DX11 Renderer Overhaul mod is a **behavior reference** for the desired fixes
-and for the proxy-DLL loading approach. It is not source code and must not
-be copied or redistributed.
-
 ## 6. References
 
 ### In this repository
@@ -333,11 +328,6 @@ High-value files:
 
 - **REA** — <https://rea.tools/> — use for binary inspection, function tracing,
   and mapping retail behavior onto the 3.1c binary.
-- **DX11 Renderer Overhaul** —
-  <https://www.moddb.com/mods/mw4-mercenaries-dx11-renderer-overhaul> —
-  behavior reference for the compatibility/input/UI fixes only. Not a
-  rendering target, not source, and not a reason to change the game's original
-  visual presentation.
 - **MekTek Rebirth** — <https://mektek.net/rebirth> — closed project. Do not
   depend on it. Public Phase 2 status is unverified; see `docs/REBIRTH.md`.
 
