@@ -138,17 +138,15 @@ presentation and original assets.
 
 ### 3.2 Backlog (not first release)
 
-13. **WASD movement with throttle decay, similar to MechWarrior 5:**
-    - `W` = throttle up
-    - `S` = throttle down; holding past zero goes into reverse
-    - `A` = turn left
-    - `D` = turn right
-    - throttle should decay naturally rather than behaving like a binary key
-    - this is an input/gameplay change, not just a keybinding change
-
-    The original request wrote "D is to throttle down" and also "D turns the
-    mech right". This guide assumes the intended scheme is **W/S throttle,
-    A/D turn**, which matches MW5-style controls. Confirm before implementing.
+13. **MechWarrior 5-style controls** — implemented (2026-11-16) as an opt-in
+    option, `[controls] mw5=1` (`docs/HOOK.md`). Design agreed with the
+    owner: W/S throttle (twice MW4's rate), S runs through zero into reverse,
+    reverse-only decay with an ease-out curve (forward throttle holds), A/D
+    turn, and an MW5-style key layout applied by the Controls DEFAULT button
+    (X full stop, P power, numpad presets, ...; Flush Coolant stays on F,
+    Center Legs To Torso keeps Shift+Space). MW4 already had W/S/A/D with a
+    held throttle and S into reverse; the original "binary throttle" note was
+    inaccurate.
 
 ## 4. Known technical facts
 
@@ -509,8 +507,6 @@ High-value files:
   reproduces with the display hooks disabled).
 - Decide whether the in-game resolution list should be extended beyond
   1600x1200.
-- Confirm the WASD throttle-decay design and whether it belongs in the same
-  hook as the input fixes.
 
 ## 10. Definition of done for the first release
 

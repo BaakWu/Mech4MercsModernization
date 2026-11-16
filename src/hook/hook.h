@@ -60,7 +60,12 @@ struct Config {
     bool checkbox_enabled = true;
     bool debug_dump_image = false;
     bool debug_automation = false;
+    bool controls_mw5 = false;  // [controls] mw5: MW5-style driving (opt-in)
 };
+
+// MW5-style keyboard driving (controls.cpp).
+bool InstallControlsHooks();
+void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWORD a2);
 
 const Config& GetConfig();
 

@@ -25,6 +25,11 @@ The first release is a **windowed-mode patch**:
 - correct mouse and display behavior with Windows display scaling above 100%
 - keep the game’s **AntiHack active and untouched**
 
+Optional, off by default: **MechWarrior 5-style controls** (`[controls] mw5=1`
+in `mw4hook.ini`): faster W/S throttle, reverse throttle eases back to zero,
+and an MW5-style key layout (X full stop, P power, numpad presets, …) loaded
+with the DEFAULT button in Options > Controls. Details in `docs/HOOK.md`.
+
 Making windowed mode usable also fixed four bugs that are in the stock game on
 current Windows: low mission frame rate, garbled audio, see-through terrain,
 and a window that froze on a second monitor. See `docs/HOOK.md`.
@@ -183,14 +188,8 @@ hook does.
 
 ## Backlog
 
-- **WASD movement with throttle decay**, similar to MechWarrior 5:
-  - `W` throttle up
-  - `S` throttle down; holding past zero goes into reverse
-  - `A` turn left
-  - `D` turn right
-  - throttle decays naturally instead of behaving like a binary key
-
-This is a gameplay/input change and is not part of the first release.
+- MechWarrior 5-style controls are implemented as an opt-in option
+  (`[controls] mw5=1`, issue #13; see above and `docs/HOOK.md`).
 
 ## Repository layout
 

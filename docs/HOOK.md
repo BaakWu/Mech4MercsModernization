@@ -158,6 +158,62 @@ behaves the same):
   categories, texture checksums, and supports a draw filter and a one-frame
   pixel probe through `mw4hook-d3dfilter.txt` (see `ddraw_proxy.cpp`).
 
+### MW5-style controls (opt-in, `[controls] mw5=1`)
+
+Issue #13. Off by default; with `mw5=0` nothing below is installed or changed.
+
+**Driving** (`controls.cpp`). The keyboard drive step `0x0054F2A0`
+(thiscall, one `double` = time; called every frame from `0x00550120`) reads
+the Accelerate/Decelerate "held" counters (`+0x3E4`/`+0x3E8`, set by the
+command handlers `0x00559120`/`0x005591E0`) and steps the working throttle
+`+0x2D8` (float, -1..1) by ±0.02 every 0.05 s; at its end the value is stored
+in `+0x564` for the next frame. Per-mech minimums (`+0x64C`, `+0x650`) make
+it skip the band around 0. A 5-byte detour runs the step, then:
+
+- repeats the game's own W/S step once (twice the rate: 0 → full in about
+  1.1 s instead of 2.5 s); only small changes, so presets are untouched,
+- with no throttle key held, eases a reverse throttle to 0 (`t·e^(-dt/0.35 s)`,
+  snapping to 0 at the mech's minimum reverse throttle; about 0.45 s from full
+  reverse); a forward throttle stays where it was set; skipped when something
+  else (joystick, presets) set the throttle that frame,
+- S keeps running from forward through 0 into reverse, as in MW4.
+
+**Key layout.** With `mw5=1`, the DEFAULT button in Options > Controls
+(`ShellControlSetDefault`, 100) first restores MW4's factory layout, then the
+hook assigns an MW5-style layout through the game's own
+`ShellControlAssignValue` (101: row, column, key `<<8`, modifier `<<8`, all
+passed as pointers; the game keeps only the virtual-key code and Shift = 2 /
+Ctrl = 4 flags, and removes a key from any other command it was on). The
+bindings therefore behave and save exactly like a manual remap (the game
+handles chat, Shift/Ctrl). With `mw5=0` DEFAULT gives MW4's factory layout as
+before. MW4's factory layout is not WASD (`=`/`-` throttle, arrows turn,
+J jump jets); MekTek pilot profiles ship with their own WASD layout.
+
+| Action | Key | | Action | Key |
+|---|---|---|---|---|
+| Turn left / right | A / D | | Target under reticule / next enemy / previous enemy | R / T / Shift+T |
+| Throttle up / down | W / S | | Target next friendly | Q |
+| **Full stop** (Set Throttle To 0%) | **X** | | Fire groups 1–6 | 1–6 |
+| **Power** (Shutdown/Startup) | **P** | | Throttle 20–90% / 100% | Numpad 2–9 / Numpad 0 |
+| Startup 'Mech | Shift+P | | Pitch torso up / down, twist left / right | ↑ / ↓ / ← / → |
+| Jump jets | Space | | Look left / right | Shift+← / Shift+→ |
+| Centre torso to legs | C | | Chain fire (Toggle Group Firing Mode) | Backspace |
+| Crouch | Shift+C | | Toggle Forward/Reverse | `\` |
+| Flush coolant | F | | Select next weapon | Ctrl+P |
+| Override auto shutdown (heat) | O | | Screen snapshot | F12 |
+| Show mission objectives | Shift+O | | Night vision (light amplification) | N |
+| Battle grid (radar/map) | B | | Next nav point | Shift+N |
+| Toggle zoom window | Z | | Toggle radar range | Shift+R |
+
+Everything else keeps MW4's factory key (Center Legs To Torso Shift+Space,
+chat Y/U, lance orders F1–F10, group toggles Shift+1–6, `[`/`]`, V view).
+The Controls list names keys by scan code, so the arrow keys are shown as
+"Num 8/2/4/6" (the numpad presets show the same names); both work as bound.
+
+Verified in the campaign mission Tharkad - Checkmate: X stops, Numpad 5 = 50%,
+Numpad 0 = 100%, P shuts down and starts up, W/S rates and the reverse decay
+as above.
+
 ### Selected resolution
 
 The Resolution dropdown is filled by `ShellGetSupportedResolutions` from a
@@ -232,6 +288,8 @@ checkbox=1    ; add the Windowed checkbox to Options > Video
 clear_fix=1   ; (default, not in the shipped ini) stop the per-frame rebuild
 zbuffer_fix=1 ; (default, not in the shipped ini) 24-bit depth instead of 16
 depth_fix=1   ; (default, not in the shipped ini) bind the attached depth buffer
+[controls]
+mw5=0         ; MW5-style driving + DEFAULT applies the MW5 key layout
 [frontend]
 stretch=1     ; scale the picture into the window
 [log]

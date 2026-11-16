@@ -176,6 +176,22 @@ int CallOriginal(DWORD a1, DWORD a2, int cmd, int option, int* value) {
 
 int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
     const int cmd = args ? args[0] : -1;
+    if (GetConfig().debug_automation && (cmd == 100 || cmd == 101)) {
+        // Test aid: how the Controls screen passes a key binding.
+        auto show = [](int v) {
+            static char text[4][48];
+            static int slot = 0;
+            char* out = text[slot++ & 3];
+            if (v > 0x10000 && !IsBadReadPtr(reinterpret_cast<void*>(v), 4)) {
+                sprintf_s(out, 48, "%08X->%d", v, *reinterpret_cast<int*>(v));
+            } else {
+                sprintf_s(out, 48, "%d", v);
+            }
+            return out;
+        };
+        Log("controls: callback %d args %s %s %s %s\n", cmd, show(args[1]), show(args[2]),
+            show(args[3]), show(args[4]));
+    }
     if ((cmd == kShellGetOptionValue || cmd == kShellSetOptionValue) && args[2]) {
         const int option = args[1];
         int* value = reinterpret_cast<int*>(args[2]);
@@ -221,6 +237,11 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
         }
     }
     int result = g_shell_callback(a1, a2, args);
+    if (cmd == 100) {
+        // ShellControlSetDefault (Controls screen DEFAULT): MW4's layout has
+        // just been restored; with [controls] mw5=1 apply the MW5 layout.
+        ApplyMw5Layout(g_shell_callback, a1, a2);
+    }
     if (cmd == kShellSaveOptions) {
         // The game rewrites screenwidth/screenheight from its own index map,
         // which disagrees with the dropdown for some entries. Write ours last.

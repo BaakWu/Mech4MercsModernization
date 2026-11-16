@@ -129,19 +129,42 @@ void Execute(const std::string& line) {
     } else if (_stricmp(verb, "key") == 0) {
         // Virtual-key code; posted as window messages and injected into the
         // DirectInput keyboard state (scan code) for code paths that poll it.
-        const UINT vk = static_cast<UINT>(strtol(rest, nullptr, 0));
+        // Optional second argument: hold time in ms (default 150); while held,
+        // auto-repeat WM_KEYDOWN messages are posted like a real keyboard.
+        char* next = nullptr;
+        const UINT vk = static_cast<UINT>(strtol(rest, &next, 0));
+        int hold = next ? atoi(next) : 0;
+        if (hold <= 0) {
+            hold = 150;
+        }
         const UINT scan = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
         HWND hwnd = MainWindow();
         InterlockedExchange(&g_key_code, static_cast<LONG>(scan));
-        InterlockedExchange(&g_key_until, static_cast<LONG>(GetTickCount() + 150));
+        InterlockedExchange(&g_key_until, static_cast<LONG>(GetTickCount() + hold));
         if (hwnd) {
             PostMessageA(hwnd, WM_KEYDOWN, vk, 1 | (scan << 16));
         }
-        Sleep(150);
+        for (int held = 0; held < hold; held += 50) {
+            Sleep(50);
+            if (hwnd && held >= 500) {
+                PostMessageA(hwnd, WM_KEYDOWN, vk, 1 | (scan << 16) | (1 << 30));
+            }
+        }
         if (hwnd) {
             PostMessageA(hwnd, WM_KEYUP, vk, 1 | (scan << 16) | 0xC0000000);
         }
         Sleep(150);
+    } else if (_stricmp(verb, "keydown") == 0 || _stricmp(verb, "keyup") == 0) {
+        // Hold or release a key (e.g. Shift) around other commands.
+        const UINT vk = static_cast<UINT>(strtol(rest, nullptr, 0));
+        const UINT scan = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+        HWND hwnd = MainWindow();
+        if (hwnd) {
+            const bool down = _stricmp(verb, "keydown") == 0;
+            PostMessageA(hwnd, down ? WM_KEYDOWN : WM_KEYUP, vk,
+                         1 | (scan << 16) | (down ? 0 : 0xC0000000));
+        }
+        Sleep(100);
     } else if (_stricmp(verb, "activate") == 0) {
         // Tell GameOS it is the active app (exclusive fullscreen ignores
         // input otherwise). Test-only; the real window does not get focus.

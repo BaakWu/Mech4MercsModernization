@@ -229,8 +229,10 @@ void DumpScript(const unsigned char* entry) {
     const char* name = reinterpret_cast<const char*>(entry + kEntryName);
     const DWORD size = *reinterpret_cast<const DWORD*>(entry + kEntrySize);
     const char* data = *reinterpret_cast<char* const*>(entry + kEntryData);
-    if (!data || size == 0 || size > 1024 * 1024 || len < 8 ||
-        _strnicmp(name + len - 7, ".script", 7) != 0) {
+    const bool script = len >= 8 && _strnicmp(name + len - 7, ".script", 7) == 0;
+    const bool header = (len >= 3 && _strnicmp(name + len - 2, ".h", 2) == 0) ||
+                        (len >= 5 && _strnicmp(name + len - 4, ".hpp", 4) == 0);
+    if (!data || size == 0 || size > 1024 * 1024 || !(script || header)) {
         return;
     }
     char path[MAX_PATH];

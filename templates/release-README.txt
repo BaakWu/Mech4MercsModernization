@@ -20,6 +20,22 @@ What it does
 
 No game file is changed. Everything happens in memory while the game runs.
 
+Optional: MechWarrior 5-style controls
+--------------------------------------
+Off by default. To turn on, open mw4hook.ini and set
+    [controls]
+    mw5=1
+Then:
+- W/S move the throttle twice as fast; S runs through zero into reverse.
+- Letting go of S while reversing eases the throttle back to zero; a forward
+  throttle stays where you set it.
+- In Options > Controls, press DEFAULT once to load the MW5-style keys:
+  X full stop, P power, N night vision, B map, R/T/Shift+T/Q targeting,
+  1-6 fire groups, numpad throttle presets (Numpad 0 = 100%), arrow keys
+  for torso pitch/twist, Backspace chain fire, F flush coolant. Press OK.
+To go back: set mw5=0 and press DEFAULT again (this gives MW4's original
+layout, which uses = and - for the throttle and the arrow keys to turn).
+
 Install
 -------
 1. Find your game folder: the one that contains MW4Mercs.exe.
