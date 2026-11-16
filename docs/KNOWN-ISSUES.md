@@ -48,23 +48,34 @@ cannot clear. Measured on the campaign mission Tharkad - Checkmate: 110-150
 fps (was 9-17), no rebuilds; menus no longer rebuild either. Confirmed by the
 player: audio and frame rate fixed.
 
-## 4. Rendering artifacts in missions — OPEN (pre-existing, not the patch)
+## 4. See-through terrain, grey sheets in missions — FIXED
 
-**Observed:** flat grey/white translucent sheets over terrain (very visible
-around the palace in Tharkad - Checkmate), see-through ground in places.
+**Was:** flat grey/white sheets over terrain (very visible around the palace
+in Tharkad - Checkmate and over the sea in Instant Action), see-through
+ground, buildings and planters drawn over buildings in front of them. Also in
+the stock game.
 
-**Findings:**
-- Same artifacts with every display feature of the hook disabled.
-- The game was running with a 16-bit depth buffer (its 24-bit request is in a
-  layout current drivers reject). The hook now gets it 24-bit depth + 8-bit
-  stencil; the sheets look the same, so depth precision is not the cause.
-- The per-frame rebuild (issue 3) is not the cause either; the sheets look
-  the same without it.
+**Cause:** the mission's Direct3D device rendered with **no depth buffer**.
+GameOS attaches the depth buffer to the render target after creating the
+device; a Direct3D 7 device only binds the depth buffer attached to its render
+target at creation or `SetRenderTarget`, so on current Windows depth testing
+silently did nothing and geometry appeared in draw order. The grey sheets were
+distant, correctly fogged palace walls painted over the nearer hill. Found by
+probing one pixel through a whole frame: the hill was drawn at depth 0.995,
+then the wall at 0.9999 (farther) still overwrote it with `ZENABLE=1`,
+`ZFUNC=LESSEQUAL`; every frame's depth `Clear` on that device failed with
+`D3DERR_ZBUFFER_NOTPRESENT` although the render target had a depth buffer
+attached.
 
-Next candidates: how the terrain is drawn by the DX7 renderer on current
-drivers (terrain LOD/vertex buffers, fog, texture-stage blending). This is a
-renderer compatibility problem; any fix must keep the original look (no
-renderer replacement, `AGENTS.md` 3.1).
+**Fix:** when a Clear reports `D3DERR_ZBUFFER_NOTPRESENT` and the render
+target has a depth buffer attached, the proxy sets the same render target
+again, which binds it (`[display] depth_fix`). Verified on the palace intro
+and the city: correct occlusion, no Clear failures afterwards. This also
+removes the cause of issue 3's rebuild loop on the main device.
+
+Also: the game's 32-bit depth request is in a layout current drivers reject
+(fell back to 16-bit); the proxy now creates the standard 24-bit + 8-bit
+stencil format it asked for (`[display] zbuffer_fix`).
 
 ## 5. Window dragged to another monitor froze — FIXED
 

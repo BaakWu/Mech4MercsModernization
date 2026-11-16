@@ -454,8 +454,10 @@ High-value files:
   `IDirect3DDevice7::Clear` made GameOS rebuild its display setup every frame
   (stock game too); the ddraw proxy retries the Clear. 9-17 fps -> 110-150
   fps in a campaign mission. The 16-bit depth-buffer fallback is replaced by
-  24-bit depth. Windows on a non-main monitor no longer freeze. Mission
-  terrain artifacts remain open (`docs/KNOWN-ISSUES.md`).
+  24-bit depth. Windows on a non-main monitor no longer freeze.
+- See-through terrain / grey sheets fixed (2026-11-16): the Direct3D device
+  rendered without a depth buffer because GameOS attaches it after creating
+  the device; the ddraw proxy re-binds it (`docs/HOOK.md`, Direct3D).
 - `MW4Mercs.exe` is unchanged on disk; all code changes are in memory and
   located by unique byte patterns (the old fixed 800x600 immediate patches
   were removed; one of them also turned the 800x600 menu entry into 1024x768).

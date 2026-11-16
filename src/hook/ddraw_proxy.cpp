@@ -26,6 +26,7 @@
 #include <windows.h>
 
 #include <ddraw.h>
+#include <d3d.h>
 
 #include <cstdarg>
 #include <cstdio>
@@ -39,6 +40,16 @@ bool g_stretch_enabled = true;
 bool g_capture_enabled = false;
 bool g_clear_fix = true;
 bool g_zbuffer_fix = true;
+bool g_depth_fix = true;
+bool g_d3d_trace = false;
+// Trace counters: DP, DIP, DPVB, DIPVB, skipped, devices created.
+volatile LONG g_draw_counts[6] = {};
+int g_tex_queue_count = 0;
+void InspectQueuedTextures();
+LONG g_frame_draw = 0;  // draw index within the current frame (reset at present)
+int g_probe_state = 0;  // 0 idle, 1 armed (waiting for frame start), 2 probing, 3 done
+LONG g_probe_x = 0, g_probe_y = 0;
+DWORD g_probe_last = 0xFFFFFFFF;
 
 void Log(const char* fmt, ...) {
     if (g_log == INVALID_HANDLE_VALUE) {
@@ -74,6 +85,8 @@ void LoadConfig() {
         GetPrivateProfileIntW(L"debug", L"automation", 0, path) != 0;
     g_clear_fix = GetPrivateProfileIntW(L"display", L"clear_fix", 1, path) != 0;
     g_zbuffer_fix = GetPrivateProfileIntW(L"display", L"zbuffer_fix", 1, path) != 0;
+    g_depth_fix = GetPrivateProfileIntW(L"display", L"depth_fix", 1, path) != 0;
+    g_d3d_trace = GetPrivateProfileIntW(L"debug", L"d3d_trace", 0, path) != 0;
     if (GetPrivateProfileIntW(L"log", L"enabled", 1, path) == 0) {
         return;
     }
@@ -483,6 +496,14 @@ void CountPresent(LONGLONG blt_ticks, bool scaled) {
             frames * static_cast<double>(freq.QuadPart) / static_cast<double>(span),
             blt_total * ms / frames, blt_max * ms, gap_max * ms, scaled_frames, frames,
             ShellModeFromHook());
+        if (g_d3d_trace) {
+            Log("  draws: DP %ld DIP %ld DPVB %ld DIPVB %ld skipped %ld, devices %ld\n",
+                g_draw_counts[0], g_draw_counts[1], g_draw_counts[2], g_draw_counts[3],
+                g_draw_counts[4], g_draw_counts[5]);
+            for (int k = 0; k < 5; ++k) {
+                g_draw_counts[k] = 0;
+            }
+        }
         window_start = now.QuadPart;
         frames = scaled_frames = 0;
         blt_total = blt_max = gap_max = 0;
@@ -498,6 +519,25 @@ HRESULT WINAPI Hook_Blt(IDirectDrawSurface7* self, LPRECT dest_rect,
     if (src && dest_rect) {
         DDSCAPS2 caps{};
         if (SUCCEEDED(self->GetCaps(&caps)) && (caps.dwCaps & DDSCAPS_PRIMARYSURFACE)) {
+            if (g_d3d_trace && g_tex_queue_count) {
+                InspectQueuedTextures();  // between frames, outside the scene
+            }
+            if (g_d3d_trace) {
+                static LONG max_draws = 0;
+                if (g_frame_draw > max_draws + 50 || g_frame_draw * 2 < max_draws) {
+                    max_draws = g_frame_draw;
+                    Log("frame draws: %ld\n", g_frame_draw);
+                }
+                g_frame_draw = 0;
+                if (g_probe_state == 2) {
+                    g_probe_state = 3;
+                    Log("probe: frame done\n");
+                } else if (g_probe_state == 1) {
+                    g_probe_state = 2;
+                    g_probe_last = 0xFFFFFFFF;
+                    Log("probe: start at %ld,%ld\n", g_probe_x, g_probe_y);
+                }
+            }
             LARGE_INTEGER end;
             QueryPerformanceCounter(&end);
             CountPresent(end.QuadPart - start.QuadPart, g_last_blt_stretched);
@@ -715,10 +755,56 @@ HRESULT WINAPI Hook_CreateSurface(IDirectDraw7* self, DDSURFACEDESC2* desc,
     if (SUCCEEDED(result) && surface && *surface) {
         PatchSurfaceVtable(*surface);
     }
+    if (desc && !zbuffer && (FAILED(result) || g_d3d_trace)) {
+        // Failed surfaces always; with the trace, each distinct format once.
+        const DDPIXELFORMAT& pf = desc->ddpfPixelFormat;
+        static unsigned long long seen[256];
+        static int seen_count = 0;
+        const unsigned long long key =
+            (static_cast<unsigned long long>(desc->ddsCaps.dwCaps) << 32) ^ pf.dwFlags ^
+            (static_cast<unsigned long long>(pf.dwRGBBitCount) << 20) ^ pf.dwRBitMask ^
+            (static_cast<unsigned long long>(pf.dwRGBAlphaBitMask) << 8) ^ pf.dwFourCC ^
+            (FAILED(result) ? 0x8000000000000000ull : 0);
+        bool first = true;
+        for (int k = 0; k < seen_count; ++k) {
+            if (seen[k] == key) {
+                first = false;
+                break;
+            }
+        }
+        if (first && seen_count < 256) {
+            seen[seen_count++] = key;
+            Log("CreateSurface caps 0x%08lX caps2 0x%08lX %lux%lu flags 0x%08lX pf 0x%08lX "
+                "fourcc 0x%08lX bits %lu masks %08lX/%08lX/%08lX/%08lX -> 0x%08lX\n",
+                desc->ddsCaps.dwCaps, desc->ddsCaps.dwCaps2, desc->dwWidth, desc->dwHeight,
+                desc->dwFlags, pf.dwFlags, pf.dwFourCC, pf.dwRGBBitCount, pf.dwRBitMask,
+                pf.dwGBitMask, pf.dwBBitMask, pf.dwRGBAlphaBitMask, result);
+        }
+    }
     if (zbuffer) {
         Log("z-buffer %lux%lu: %lu-bit Z mask 0x%08lX, stencil %lu bits -> 0x%08lX\n",
             desc->dwWidth, desc->dwHeight, desc->ddpfPixelFormat.dwZBufferBitDepth,
             desc->ddpfPixelFormat.dwZBitMask, desc->ddpfPixelFormat.dwStencilBitDepth, result);
+    }
+    return result;
+}
+
+using GetAvailableVidMem_t = HRESULT(WINAPI*)(IDirectDraw7*, DDSCAPS2*, DWORD*, DWORD*);
+GetAvailableVidMem_t g_original_get_vidmem = nullptr;
+
+// Logs what the game is told about video memory (each distinct answer once).
+HRESULT WINAPI Hook_GetAvailableVidMem(IDirectDraw7* self, DDSCAPS2* caps, DWORD* total,
+                                       DWORD* free_mem) {
+    HRESULT result = g_original_get_vidmem(self, caps, total, free_mem);
+    static DWORD last_total = 0xFFFFFFFF;
+    static DWORD last_caps = 0xFFFFFFFF;
+    const DWORD c = caps ? caps->dwCaps : 0;
+    const DWORD t = total ? *total : 0;
+    if (t != last_total || c != last_caps) {
+        last_total = t;
+        last_caps = c;
+        Log("GetAvailableVidMem caps 0x%08lX: total %lu MB (%lu), free %lu MB (%lu) -> 0x%08lX\n",
+            c, t >> 20, t, free_mem ? *free_mem >> 20 : 0, free_mem ? *free_mem : 0, result);
     }
     return result;
 }
@@ -765,11 +851,58 @@ bool PatchSlot(void** vtable, int index, void* hook) {
     return true;
 }
 
+// GameOS attaches the depth buffer to the render target after it created the
+// Direct3D device. A Direct3D 7 device only picks up the depth buffer attached
+// to its render target when the device is created or SetRenderTarget is
+// called, so on current Windows the mission device rendered with no depth
+// buffer at all: no depth test, geometry in draw order (far walls over near
+// terrain, "see-through" ground). When a Clear reports
+// D3DERR_ZBUFFER_NOTPRESENT but the render target does have a depth buffer
+// attached, setting the same render target again binds it.
+bool RebindDepthBuffer(void* device) {
+    using GetRT_t = HRESULT(WINAPI*)(void*, IDirectDrawSurface7**);
+    using SetRT_t = HRESULT(WINAPI*)(void*, IDirectDrawSurface7*, DWORD);
+    void** vtable = *reinterpret_cast<void***>(device);
+    auto get_rt = reinterpret_cast<GetRT_t>(vtable[9]);
+    auto set_rt = reinterpret_cast<SetRT_t>(vtable[8]);
+    IDirectDrawSurface7* rt = nullptr;
+    if (FAILED(get_rt(device, &rt)) || !rt) {
+        return false;
+    }
+    DDSCAPS2 caps{};
+    caps.dwCaps = DDSCAPS_ZBUFFER;
+    IDirectDrawSurface7* depth = nullptr;
+    bool rebound = false;
+    if (SUCCEEDED(rt->GetAttachedSurface(&caps, &depth)) && depth) {
+        const HRESULT hr = set_rt(device, rt, 0);
+        rebound = SUCCEEDED(hr);
+        static int logged = 0;
+        if (logged < 8) {
+            ++logged;
+            DDSURFACEDESC2 desc{};
+            desc.dwSize = sizeof(desc);
+            rt->GetSurfaceDesc(&desc);
+            Log("depth buffer: device %p render target %lux%lu had depth buffer %p attached but "
+                "not bound; SetRenderTarget -> 0x%08lX\n",
+                device, desc.dwWidth, desc.dwHeight, depth, hr);
+        }
+        depth->Release();
+    }
+    rt->Release();
+    return rebound;
+}
+
 HRESULT WINAPI Hook_D3DClear(void* device, DWORD count, void* rects, DWORD flags,
                              DWORD color, float z, DWORD stencil) {
     HRESULT result = g_original_clear(device, count, rects, flags, color, z, stencil);
     if (SUCCEEDED(result) || result == DDERR_SURFACELOST) {
         return result;
+    }
+    if (result == D3DERR_ZBUFFER_NOTPRESENT && g_depth_fix && RebindDepthBuffer(device)) {
+        result = g_original_clear(device, count, rects, flags, color, z, stencil);
+        if (SUCCEEDED(result)) {
+            return result;
+        }
     }
     HRESULT retry = E_FAIL;
     DWORD retry_flags = flags;
@@ -789,12 +922,647 @@ HRESULT WINAPI Hook_D3DClear(void* device, DWORD count, void* rects, DWORD flags
     static unsigned failures = 0;
     const unsigned n = ++failures;
     if ((n & (n - 1)) == 0) {
-        Log("Clear(count=%lu flags=0x%lX) failed 0x%08lX; retry flags 0x%lX -> 0x%08lX "
-            "(failure %u)\n",
-            count, flags, result, retry_flags, retry, n);
+        Log("Clear(count=%lu flags=0x%lX) on device %p failed 0x%08lX; retry flags 0x%lX -> "
+            "0x%08lX (failure %u)\n",
+            count, flags, device, result, retry_flags, retry, n);
     }
     return SUCCEEDED(retry) ? retry : result;
 }
+
+// ---------------------------------------------------------------------------
+// Development-only Direct3D trace ([debug] d3d_trace=1): logs each distinct
+// render state, texture stage state, draw vertex format and ValidateDevice
+// result once, so renderer differences can be compared between machines.
+// ---------------------------------------------------------------------------
+
+using SetState_t = HRESULT(WINAPI*)(void*, DWORD, DWORD);
+using SetTSS_t = HRESULT(WINAPI*)(void*, DWORD, DWORD, DWORD);
+using Validate_t = HRESULT(WINAPI*)(void*, DWORD*);
+using DrawPrim_t = HRESULT(WINAPI*)(void*, DWORD, DWORD, void*, DWORD, DWORD);
+using DrawIdx_t = HRESULT(WINAPI*)(void*, DWORD, DWORD, void*, DWORD, WORD*, DWORD, DWORD);
+using GetCaps_t = HRESULT(WINAPI*)(void*, void*);
+SetState_t g_original_set_render_state = nullptr;
+SetTSS_t g_original_set_tss = nullptr;
+Validate_t g_original_validate = nullptr;
+DrawPrim_t g_original_draw_prim = nullptr;
+DrawIdx_t g_original_draw_idx = nullptr;
+
+bool FirstTime(unsigned long long key) {
+    static unsigned long long seen[8192];
+    static int count = 0;
+    for (int i = 0; i < count; ++i) {
+        if (seen[i] == key) {
+            return false;
+        }
+    }
+    if (count < 8192) {
+        seen[count++] = key;
+        return true;
+    }
+    return false;
+}
+
+// Current state as set through the hooks (trace mode only).
+DWORD g_rs[256] = {};
+DWORD g_tss[8][32] = {};
+void* g_texture[8] = {};
+
+// Draw filter (trace mode): mw4hook-d3dfilter.txt in the game directory, one
+// rule per line, "rs <state> <value>", "tss <stage> <type> <value>" or
+// "tex <stage> <hex pointer>"; a draw matching any rule is skipped. Re-read
+// every 250 ms. Used to find which draws produce a visual artifact.
+struct FilterRule {
+    int kind;  // 1 rs, 2 tss, 3 tex
+    DWORD a, b, c;
+};
+FilterRule g_filter[32];
+int g_filter_count = 0;
+
+void ReloadFilter() {
+    static DWORD last = 0;
+    const DWORD now = GetTickCount();
+    if (now - last < 250) {
+        return;
+    }
+    last = now;
+    wchar_t path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    wchar_t* slash = len ? wcsrchr(path, L'\\') : nullptr;
+    if (!slash) {
+        return;
+    }
+    wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"mw4hook-d3dfilter.txt");
+    FILE* file = nullptr;
+    int count = 0;
+    if (_wfopen_s(&file, path, L"r") == 0 && file) {
+        char line[128];
+        while (count < 32 && fgets(line, sizeof(line), file)) {
+            FilterRule r{};
+            unsigned long a = 0, b = 0, c = 0;
+            if (sscanf_s(line, "rs %lu %li", &a, reinterpret_cast<long*>(&b)) == 2) {
+                r = {1, a, b, 0};
+            } else if (sscanf_s(line, "tss %lu %lu %li", &a, &b, reinterpret_cast<long*>(&c)) == 3) {
+                r = {2, a, b, c};
+            } else if (sscanf_s(line, "tex %lu %lx", &a, &b) == 2) {
+                r = {3, a, b, 0};
+            } else if (sscanf_s(line, "sum %lu %lu", &a, &b) == 2) {
+                r = {7, a, b, 0};  // texture checksum % a == b
+            } else if (sscanf_s(line, "probe %lu %lu", &a, &b) == 2) {
+                if (g_probe_state == 0) {
+                    g_probe_x = static_cast<LONG>(a);
+                    g_probe_y = static_cast<LONG>(b);
+                    g_probe_state = 1;
+                }
+                continue;
+            } else if (sscanf_s(line, "range %lu %lu", &a, &b) == 2) {
+                r = {9, a, b, 0};  // skip draws a..b-1 of every frame
+            } else if (sscanf_s(line, "sumis %lx", &a) == 1) {
+                r = {8, a, 0, 0};  // texture checksum == a
+            } else if (strncmp(line, "splitaddress", 12) == 0) {
+                r = {6, 0, 0, 0};  // also set ADDRESSU/V when ADDRESS is set
+            } else if (sscanf_s(line, "force rs %lu %li", &a, reinterpret_cast<long*>(&b)) == 2) {
+                r = {4, a, b, 0};  // override the value whenever the game sets it
+            } else if (sscanf_s(line, "force tss %lu %lu %li", &a, &b,
+                                reinterpret_cast<long*>(&c)) == 3) {
+                r = {5, a, b, c};
+            } else {
+                continue;
+            }
+            g_filter[count++] = r;
+        }
+        fclose(file);
+    }
+    if (count != g_filter_count) {
+        Log("d3d filter: %d rule(s)\n", count);
+    }
+    g_filter_count = count;
+}
+
+// Logs each distinct draw state combination once, with a draw counter, so
+// categories of geometry can be told apart.
+void NoteDrawState(const char* call, DWORD type, DWORD fvf, DWORD count) {
+    const unsigned long long key =
+        (static_cast<unsigned long long>(g_rs[D3DRENDERSTATE_ZFUNC] & 0xF) << 0) |
+        (static_cast<unsigned long long>(g_rs[D3DRENDERSTATE_ZWRITEENABLE] & 1) << 4) |
+        (static_cast<unsigned long long>(g_rs[D3DRENDERSTATE_ZENABLE] & 3) << 5) |
+        (static_cast<unsigned long long>(g_rs[D3DRENDERSTATE_ALPHABLENDENABLE] & 1) << 7) |
+        (static_cast<unsigned long long>(g_rs[D3DRENDERSTATE_SRCBLEND] & 0xF) << 8) |
+        (static_cast<unsigned long long>(g_rs[D3DRENDERSTATE_DESTBLEND] & 0xF) << 12) |
+        (static_cast<unsigned long long>(g_rs[D3DRENDERSTATE_ALPHATESTENABLE] & 1) << 16) |
+        (static_cast<unsigned long long>(g_rs[D3DRENDERSTATE_FOGENABLE] & 1) << 17) |
+        (static_cast<unsigned long long>(g_tss[0][D3DTSS_COLOROP] & 0x1F) << 18) |
+        (static_cast<unsigned long long>(g_tss[1][D3DTSS_COLOROP] & 0x1F) << 23) |
+        (static_cast<unsigned long long>(g_rs[D3DRENDERSTATE_CULLMODE] & 3) << 28) |
+        (static_cast<unsigned long long>(fvf & 0xFFF) << 30) | (6ull << 60);
+    if (FirstTime(key)) {
+        Log("d3d draw %s type %lu fvf 0x%lX n=%lu: zenable %lu zfunc %lu zwrite %lu blend %lu "
+            "(%lu,%lu) atest %lu fog %lu cull %lu op0 %lu op1 %lu tex0 %p tex1 %p\n",
+            call, type, fvf, count, g_rs[D3DRENDERSTATE_ZENABLE], g_rs[D3DRENDERSTATE_ZFUNC],
+            g_rs[D3DRENDERSTATE_ZWRITEENABLE], g_rs[D3DRENDERSTATE_ALPHABLENDENABLE],
+            g_rs[D3DRENDERSTATE_SRCBLEND], g_rs[D3DRENDERSTATE_DESTBLEND],
+            g_rs[D3DRENDERSTATE_ALPHATESTENABLE], g_rs[D3DRENDERSTATE_FOGENABLE],
+            g_rs[D3DRENDERSTATE_CULLMODE], g_tss[0][D3DTSS_COLOROP], g_tss[1][D3DTSS_COLOROP],
+            g_texture[0], g_texture[1]);
+    }
+}
+
+// Texture inspection (trace mode): each texture bound for a draw is queued
+// once and examined after the frame (outside the scene): size, format, mip
+// levels and whether its top level / first mip are a single flat colour.
+IDirectDrawSurface7* g_tex_queue[64];
+
+void QueueTexture(void* texture) {
+    if (!texture || g_tex_queue_count >= 64 ||
+        !FirstTime((7ull << 60) | reinterpret_cast<DWORD>(texture))) {
+        return;
+    }
+    auto* surface = static_cast<IDirectDrawSurface7*>(texture);
+    surface->AddRef();
+    g_tex_queue[g_tex_queue_count++] = surface;
+}
+
+// Texture pointer -> content checksum (stable across runs), open addressing.
+struct TexSum {
+    DWORD ptr;
+    DWORD sum;
+};
+TexSum g_tex_sums[8192];
+
+DWORD* TexSumSlot(DWORD ptr, bool insert) {
+    DWORD h = (ptr >> 4) * 2654435761u;
+    for (int i = 0; i < 8192; ++i) {
+        TexSum& e = g_tex_sums[(h + i) & 8191];
+        if (e.ptr == ptr) {
+            return &e.sum;
+        }
+        if (e.ptr == 0) {
+            if (!insert) {
+                return nullptr;
+            }
+            e.ptr = ptr;
+            return &e.sum;
+        }
+    }
+    return nullptr;
+}
+
+DWORD Checksum(IDirectDrawSurface7* surface) {
+    DDSURFACEDESC2 desc{};
+    desc.dwSize = sizeof(desc);
+    if (FAILED(surface->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_READONLY, nullptr))) {
+        return 0;
+    }
+    DWORD h = 2166136261u ^ desc.dwWidth ^ (desc.dwHeight << 16);
+    const DWORD row_bytes = desc.dwWidth * desc.ddpfPixelFormat.dwRGBBitCount / 8;
+    for (DWORD y = 0; y < desc.dwHeight; ++y) {
+        auto* row = static_cast<unsigned char*>(desc.lpSurface) + y * desc.lPitch;
+        for (DWORD x = 0; x < row_bytes; ++x) {
+            h = (h ^ row[x]) * 16777619u;
+        }
+    }
+    surface->Unlock(nullptr);
+    return h ? h : 1;
+}
+
+// Returns min/max of each channel (as 8-bit) over the surface; false on failure.
+bool ScanSurface(IDirectDrawSurface7* surface, DWORD* width, DWORD* height, DWORD* bits,
+                 int lo[4], int hi[4]) {
+    DDSURFACEDESC2 desc{};
+    desc.dwSize = sizeof(desc);
+    if (FAILED(surface->Lock(nullptr, &desc, DDLOCK_WAIT | DDLOCK_READONLY, nullptr))) {
+        return false;
+    }
+    *width = desc.dwWidth;
+    *height = desc.dwHeight;
+    *bits = desc.ddpfPixelFormat.dwRGBBitCount;
+    const DWORD masks[4] = {desc.ddpfPixelFormat.dwRBitMask, desc.ddpfPixelFormat.dwGBitMask,
+                            desc.ddpfPixelFormat.dwBBitMask,
+                            desc.ddpfPixelFormat.dwRGBAlphaBitMask};
+    for (int c = 0; c < 4; ++c) {
+        lo[c] = 255;
+        hi[c] = 0;
+    }
+    for (DWORD y = 0; y < desc.dwHeight; ++y) {
+        auto* row = static_cast<unsigned char*>(desc.lpSurface) + y * desc.lPitch;
+        for (DWORD x = 0; x < desc.dwWidth; ++x) {
+            DWORD px = *bits == 32 ? reinterpret_cast<DWORD*>(row)[x]
+                                   : reinterpret_cast<WORD*>(row)[x];
+            for (int c = 0; c < 4; ++c) {
+                if (!masks[c]) {
+                    continue;
+                }
+                DWORD m = masks[c];
+                int shift = 0;
+                while (!(m & 1)) {
+                    m >>= 1;
+                    ++shift;
+                }
+                const int v = static_cast<int>(((px >> shift) & m) * 255 / m);
+                lo[c] = v < lo[c] ? v : lo[c];
+                hi[c] = v > hi[c] ? v : hi[c];
+            }
+        }
+    }
+    surface->Unlock(nullptr);
+    return true;
+}
+
+void InspectQueuedTextures() {
+    for (int i = 0; i < g_tex_queue_count; ++i) {
+        IDirectDrawSurface7* surface = g_tex_queue[i];
+        DWORD w = 0, h = 0, bits = 0;
+        int lo[4], hi[4];
+        DDSURFACEDESC2 desc{};
+        desc.dwSize = sizeof(desc);
+        surface->GetSurfaceDesc(&desc);
+        const DWORD sum = Checksum(surface);
+        if (DWORD* slot = TexSumSlot(reinterpret_cast<DWORD>(surface), true)) {
+            *slot = sum;
+        }
+        if (ScanSurface(surface, &w, &h, &bits, lo, hi)) {
+            const bool flat = hi[0] - lo[0] < 8 && hi[1] - lo[1] < 8 && hi[2] - lo[2] < 8;
+            // First mip level below the top, if any.
+            char mip[96] = "no mips";
+            DDSCAPS2 caps{};
+            caps.dwCaps = DDSCAPS_TEXTURE | DDSCAPS_MIPMAP;
+            IDirectDrawSurface7* level = nullptr;
+            if (SUCCEEDED(surface->GetAttachedSurface(&caps, &level)) && level) {
+                DWORD mw = 0, mh = 0, mb = 0;
+                int mlo[4], mhi[4];
+                if (ScanSurface(level, &mw, &mh, &mb, mlo, mhi)) {
+                    sprintf_s(mip, "mip1 %lux%lu rgb %d-%d/%d-%d/%d-%d", mw, mh, mlo[0], mhi[0],
+                              mlo[1], mhi[1], mlo[2], mhi[2]);
+                }
+                level->Release();
+            }
+            Log("tex %p sum %08lX %lux%lu %lu-bit mipcount %lu caps 0x%08lX rgb %d-%d/%d-%d/%d-%d "
+                "a %d-%d%s; %s\n",
+                surface, sum, w, h, bits, desc.dwMipMapCount, desc.ddsCaps.dwCaps, lo[0], hi[0],
+                lo[1], hi[1], lo[2], hi[2], lo[3], hi[3], flat ? " FLAT" : "", mip);
+        } else {
+            Log("tex %p: Lock failed\n", surface);
+        }
+        surface->Release();
+    }
+    g_tex_queue_count = 0;
+}
+
+// Vertex anomalies (trace mode) for pre-transformed vertices (FVF 0x1C4:
+// x, y, z, rhw, diffuse, specular, u, v): counts per bound texture of
+// vertices with z outside [0,1], rhw <= 0 or non-finite values, logged once
+// per texture per kind together with the UV range of that draw.
+void ScanVertices(const void* vertices, DWORD fvf, DWORD count, DWORD primitive_count) {
+    if (fvf != 0x1C4 || !vertices || count == 0) {
+        return;
+    }
+    const float* v = static_cast<const float*>(vertices);
+    int z_low = 0, z_high = 0, bad_rhw = 0;
+    float umin = 1e30f, umax = -1e30f, vmin = 1e30f, vmax = -1e30f;
+    float zmin = 1e30f, zmax = -1e30f, rmin = 1e30f, rmax = -1e30f;
+    for (DWORD i = 0; i < count; ++i, v += 8) {
+        const float z = v[2], rhw = v[3], tu = v[6], tv = v[7];
+        z_low += z < 0.0f;
+        z_high += z > 1.0f;
+        bad_rhw += !(rhw > 0.0f) || rhw != rhw;
+        zmin = z < zmin ? z : zmin;
+        zmax = z > zmax ? z : zmax;
+        rmin = rhw < rmin ? rhw : rmin;
+        rmax = rhw > rmax ? rhw : rmax;
+        umin = tu < umin ? tu : umin;
+        umax = tu > umax ? tu : umax;
+        vmin = tv < vmin ? tv : vmin;
+        vmax = tv > vmax ? tv : vmax;
+    }
+    const int kind = (z_low ? 1 : 0) | (z_high ? 2 : 0) | (bad_rhw ? 4 : 0);
+    const bool wide_uv = umax - umin > 8.0f || vmax - vmin > 8.0f;
+    if (!kind && !wide_uv) {
+        return;
+    }
+    if (FirstTime((8ull << 60) | (static_cast<unsigned long long>(kind | (wide_uv ? 8 : 0)) << 32) |
+                  reinterpret_cast<DWORD>(g_texture[0]))) {
+        Log("verts tex %p n=%lu prims=%lu: z<0 %d z>1 %d badrhw %d z %.4f..%.4f rhw %.5f..%.5f "
+            "u %.2f..%.2f v %.2f..%.2f zfunc %lu zwrite %lu\n",
+            g_texture[0], count, primitive_count, z_low, z_high, bad_rhw, zmin, zmax, rmin, rmax,
+            umin, umax, vmin, vmax, g_rs[D3DRENDERSTATE_ZFUNC],
+            g_rs[D3DRENDERSTATE_ZWRITEENABLE]);
+    }
+}
+
+// Pixel probe (trace mode): "probe x y" in the filter file makes the next full
+// frame log the colour of render-target pixel (x, y) after every draw that
+// changed it, with the draw's texture checksum and state. One frame only.
+
+void ProbeAfterDraw(void* device, const char* call, DWORD type, DWORD count,
+                    const void* vertices, DWORD fvf, DWORD vcount, const WORD* indices) {
+    if (g_probe_state != 2) {
+        return;
+    }
+    using GetRT_t = HRESULT(WINAPI*)(void*, IDirectDrawSurface7**);
+    auto get_rt = reinterpret_cast<GetRT_t>((*reinterpret_cast<void***>(device))[9]);
+    IDirectDrawSurface7* rt = nullptr;
+    if (FAILED(get_rt(device, &rt)) || !rt) {
+        return;
+    }
+    DDSURFACEDESC2 desc{};
+    desc.dwSize = sizeof(desc);
+    RECT r = {g_probe_x, g_probe_y, g_probe_x + 1, g_probe_y + 1};
+    DWORD px = 0;
+    DWORD width = 0;
+    HRESULT lock = rt->Lock(&r, &desc, DDLOCK_WAIT | DDLOCK_READONLY, nullptr);
+    if (SUCCEEDED(lock)) {
+        width = desc.dwWidth;
+        px = desc.ddpfPixelFormat.dwRGBBitCount == 32 ? *static_cast<DWORD*>(desc.lpSurface)
+                                                      : *static_cast<WORD*>(desc.lpSurface);
+        rt->Unlock(&r);
+    }
+    static bool rt_logged = false;
+    if (!rt_logged && width >= 256) {
+        rt_logged = true;
+        DDSCAPS2 zcaps{};
+        zcaps.dwCaps = DDSCAPS_ZBUFFER;
+        IDirectDrawSurface7* z = nullptr;
+        const HRESULT zr = rt->GetAttachedSurface(&zcaps, &z);
+        DDSURFACEDESC2 rd{};
+        rd.dwSize = sizeof(rd);
+        rt->GetSurfaceDesc(&rd);
+        Log("probe: render target %p %lux%lu caps 0x%08lX, attached z-buffer %p (0x%08lX)\n", rt,
+            rd.dwWidth, rd.dwHeight, rd.ddsCaps.dwCaps, z, zr);
+        if (z) {
+            z->Release();
+        }
+    }
+    rt->Release();
+    if (width < 256) {
+        return;  // a small render-to-texture target, not the frame
+    }
+    if (FAILED(lock)) {
+        Log("probe: lock failed 0x%08lX\n", lock);
+        g_probe_state = 3;
+        return;
+    }
+    if (px != g_probe_last) {
+        g_probe_last = px;
+        const DWORD* sum = g_texture[0] ? TexSumSlot(reinterpret_cast<DWORD>(g_texture[0]), false)
+                                        : nullptr;
+        Log("probe draw %ld %s type %lu n=%lu: pixel 0x%08lX tex %p sum %08lX zen %lu zfunc %lu "
+            "zwrite %lu blend %lu (%lu,%lu) atest %lu fog %lu op0 %lu aop0 %lu\n",
+            g_frame_draw - 1, call, type, count, px, g_texture[0], sum ? *sum : 0,
+            g_rs[D3DRENDERSTATE_ZENABLE], g_rs[D3DRENDERSTATE_ZFUNC],
+            g_rs[D3DRENDERSTATE_ZWRITEENABLE], g_rs[D3DRENDERSTATE_ALPHABLENDENABLE],
+            g_rs[D3DRENDERSTATE_SRCBLEND], g_rs[D3DRENDERSTATE_DESTBLEND],
+            g_rs[D3DRENDERSTATE_ALPHATESTENABLE], g_rs[D3DRENDERSTATE_FOGENABLE],
+            g_tss[0][D3DTSS_COLOROP], g_tss[0][D3DTSS_ALPHAOP]);
+        {
+            using GetRS_t = HRESULT(WINAPI*)(void*, DWORD, DWORD*);
+            auto get_rs = reinterpret_cast<GetRS_t>((*reinterpret_cast<void***>(device))[21]);
+            const DWORD ids[] = {7, 14, 23, 27, 19, 20, 15, 28, 22};
+            DWORD vals[9] = {};
+            for (int k = 0; k < 9; ++k) {
+                get_rs(device, ids[k], &vals[k]);
+            }
+            Log("  device %p state: zenable %lu zwrite %lu zfunc %lu blend %lu src %lu dst %lu atest %lu fog %lu cull %lu\n",
+                device, vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], vals[8]);
+        }
+        if (vertices && fvf == 0x1C4) {
+            const float* v = static_cast<const float*>(vertices);
+            for (DWORD k = 0; k < vcount && k < 24; ++k) {
+                const float* p = v + k * 8;
+                Log("  v%lu: x %.1f y %.1f z %.5f rhw %.6f diffuse %08lX spec %08lX u %.4f v %.4f\n", k,
+                    p[0], p[1], p[2], p[3], reinterpret_cast<const DWORD*>(p)[4],
+                    reinterpret_cast<const DWORD*>(p)[5], p[6], p[7]);
+            }
+            if (indices) {
+                Log("  idx: %u %u %u %u %u %u\n", indices[0], indices[1], indices[2], indices[3], indices[4], indices[5]);
+            }
+        } else {
+            Log("  fvf 0x%lX\n", fvf);
+        }
+    }
+}
+
+bool SkipDraw() {
+    ReloadFilter();
+    const LONG index = g_frame_draw++;
+    for (int i = 0; i < g_filter_count; ++i) {
+        const FilterRule& r = g_filter[i];
+        if (r.kind == 9 && index >= static_cast<LONG>(r.a) && index < static_cast<LONG>(r.b)) {
+            ++g_draw_counts[4];
+            return true;
+        }
+        // (counted below when matched)
+        if ((r.kind == 1 && r.a < 256 && g_rs[r.a] == r.b) ||
+            (r.kind == 2 && r.a < 8 && r.b < 32 && g_tss[r.a][r.b] == r.c) ||
+            (r.kind == 3 && r.a < 8 &&
+             reinterpret_cast<DWORD>(g_texture[r.a]) == r.b)) {
+            ++g_draw_counts[4];
+            return true;
+        }
+        if ((r.kind == 7 || r.kind == 8) && g_texture[0]) {
+            const DWORD* sum = TexSumSlot(reinterpret_cast<DWORD>(g_texture[0]), false);
+            if (sum && *sum &&
+                ((r.kind == 7 && r.a && *sum % r.a == r.b) || (r.kind == 8 && *sum == r.a))) {
+                ++g_draw_counts[4];
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+using SetTexture_t = HRESULT(WINAPI*)(void*, DWORD, void*);
+using DrawPrimVB_t = HRESULT(WINAPI*)(void*, DWORD, void*, DWORD, DWORD, DWORD);
+using DrawIdxVB_t = HRESULT(WINAPI*)(void*, DWORD, void*, DWORD, DWORD, WORD*, DWORD, DWORD);
+SetTexture_t g_original_set_texture = nullptr;
+DrawPrimVB_t g_original_draw_prim_vb = nullptr;
+DrawIdxVB_t g_original_draw_idx_vb = nullptr;
+
+void PatchTraceDevice(void* device);
+
+HRESULT WINAPI Hook_SetTexture(void* device, DWORD stage, void* texture) {
+    PatchTraceDevice(device);
+    if (stage < 8) {
+        g_texture[stage] = texture;
+    }
+    return g_original_set_texture(device, stage, texture);
+}
+
+HRESULT WINAPI Hook_DrawPrimitiveVB(void* device, DWORD type, void* vb, DWORD start,
+                                    DWORD count, DWORD flags) {
+    ++g_draw_counts[2];
+    NoteDrawState("DrawPrimitiveVB", type, 0xFFF, count);
+    if (SkipDraw()) {
+        return D3D_OK;
+    }
+    return g_original_draw_prim_vb(device, type, vb, start, count, flags);
+}
+
+HRESULT WINAPI Hook_DrawIndexedPrimitiveVB(void* device, DWORD type, void* vb, DWORD start,
+                                           DWORD vcount, WORD* indices, DWORD icount,
+                                           DWORD flags) {
+    ++g_draw_counts[3];
+    NoteDrawState("DrawIndexedPrimitiveVB", type, 0xFFE, icount);
+    if (SkipDraw()) {
+        return D3D_OK;
+    }
+    return g_original_draw_idx_vb(device, type, vb, start, vcount, indices, icount, flags);
+}
+
+HRESULT WINAPI Hook_SetRenderState(void* device, DWORD state, DWORD value) {
+    ReloadFilter();
+    for (int i = 0; i < g_filter_count; ++i) {
+        if (g_filter[i].kind == 4 && g_filter[i].a == state) {
+            value = g_filter[i].b;
+        }
+    }
+    if (state < 256) {
+        g_rs[state] = value;
+    }
+    HRESULT result = g_original_set_render_state(device, state, value);
+    if (FirstTime((1ull << 60) | (static_cast<unsigned long long>(state) << 32) | value)) {
+        Log("d3d: RS %lu = 0x%lX -> 0x%08lX\n", state, value, result);
+    }
+    return result;
+}
+
+HRESULT WINAPI Hook_SetTextureStageState(void* device, DWORD stage, DWORD type, DWORD value) {
+    PatchTraceDevice(device);
+    for (int i = 0; i < g_filter_count; ++i) {
+        if (g_filter[i].kind == 5 && g_filter[i].a == stage && g_filter[i].b == type) {
+            value = g_filter[i].c;
+        }
+    }
+    if (stage < 8 && type < 32) {
+        g_tss[stage][type] = value;
+    }
+    HRESULT result = g_original_set_tss(device, stage, type, value);
+    bool split = false;
+    for (int i = 0; i < g_filter_count; ++i) {
+        split = split || g_filter[i].kind == 6;
+    }
+    if (split && type == D3DTSS_ADDRESS) {
+        g_original_set_tss(device, stage, D3DTSS_ADDRESSU, value);
+        g_original_set_tss(device, stage, D3DTSS_ADDRESSV, value);
+    }
+    if (FirstTime((2ull << 60) | (static_cast<unsigned long long>(stage) << 48) |
+                  (static_cast<unsigned long long>(type) << 32) | value)) {
+        Log("d3d: TSS stage %lu type %lu = 0x%lX -> 0x%08lX\n", stage, type, value, result);
+    }
+    return result;
+}
+
+HRESULT WINAPI Hook_ValidateDevice(void* device, DWORD* passes) {
+    HRESULT result = g_original_validate(device, passes);
+    static unsigned n = 0;
+    ++n;
+    if (FirstTime((3ull << 60) | static_cast<DWORD>(result)) || (n & (n - 1)) == 0) {
+        Log("d3d: ValidateDevice -> 0x%08lX passes %lu (call %u)\n", result,
+            passes ? *passes : 0, n);
+    }
+    return result;
+}
+
+HRESULT WINAPI Hook_DrawPrimitive(void* device, DWORD type, DWORD fvf, void* vertices,
+                                  DWORD count, DWORD flags) {
+    ++g_draw_counts[0];
+    QueueTexture(g_texture[0]);
+    ScanVertices(vertices, fvf, count, 0);
+    NoteDrawState("DrawPrimitive", type, fvf, count);
+    if (SkipDraw()) {
+        return D3D_OK;
+    }
+    HRESULT result = g_original_draw_prim(device, type, fvf, vertices, count, flags);
+    ProbeAfterDraw(device, "DP", type, count, vertices, fvf, count, nullptr);
+    if (FirstTime((4ull << 60) | (static_cast<unsigned long long>(type) << 40) |
+                  (static_cast<unsigned long long>(fvf) << 8) | (FAILED(result) ? 1 : 0))) {
+        Log("d3d: DrawPrimitive type %lu fvf 0x%lX -> 0x%08lX\n", type, fvf, result);
+    }
+    return result;
+}
+
+HRESULT WINAPI Hook_DrawIndexedPrimitive(void* device, DWORD type, DWORD fvf, void* vertices,
+                                         DWORD vcount, WORD* indices, DWORD icount,
+                                         DWORD flags) {
+    ++g_draw_counts[1];
+    QueueTexture(g_texture[0]);
+    ScanVertices(vertices, fvf, vcount, icount / 3);
+    NoteDrawState("DrawIndexedPrimitive", type, fvf, icount);
+    if (SkipDraw()) {
+        return D3D_OK;
+    }
+    HRESULT result =
+        g_original_draw_idx(device, type, fvf, vertices, vcount, indices, icount, flags);
+    ProbeAfterDraw(device, "DIP", type, icount, vertices, fvf, vcount, indices);
+    if (FirstTime((5ull << 60) | (static_cast<unsigned long long>(type) << 40) |
+                  (static_cast<unsigned long long>(fvf) << 8) | (FAILED(result) ? 1 : 0))) {
+        Log("d3d: DrawIndexedPrimitive type %lu fvf 0x%lX -> 0x%08lX\n", type, fvf, result);
+    }
+    return result;
+}
+
+void LogDeviceCaps(void* device) {
+    D3DDEVICEDESC7 caps{};
+    auto get_caps = reinterpret_cast<GetCaps_t>((*reinterpret_cast<void***>(device))[3]);
+    if (FAILED(get_caps(device, &caps))) {
+        return;
+    }
+    Log("d3d caps: devcaps 0x%08lX texopcaps 0x%08lX stages %u textures %u "
+        "raster 0x%08lX zcmp 0x%08lX srcblend 0x%08lX dstblend 0x%08lX texcaps 0x%08lX "
+        "filter 0x%08lX\n",
+        caps.dwDevCaps, caps.dwTextureOpCaps, caps.wMaxTextureBlendStages,
+        caps.wMaxSimultaneousTextures, caps.dpcTriCaps.dwRasterCaps, caps.dpcTriCaps.dwZCmpCaps,
+        caps.dpcTriCaps.dwSrcBlendCaps, caps.dpcTriCaps.dwDestBlendCaps,
+        caps.dpcTriCaps.dwTextureCaps, caps.dpcTriCaps.dwTextureFilterCaps);
+}
+
+// Hot-patch a Windows system function (MSVC /hotpatch layout: "mov edi,edi"
+// at the entry and five padding bytes before it). Returns the address that
+// continues the original function, or nullptr if the layout does not match.
+void* HotPatch(void* target, void* hook) {
+    auto* p = static_cast<unsigned char*>(target);
+    if (p[0] != 0x8B || p[1] != 0xFF) {
+        return nullptr;
+    }
+    for (int i = 1; i <= 5; ++i) {
+        if (p[-i] != 0xCC && p[-i] != 0x90) {
+            return nullptr;
+        }
+    }
+    DWORD old = 0;
+    if (!VirtualProtect(p - 5, 7, PAGE_EXECUTE_READWRITE, &old)) {
+        return nullptr;
+    }
+    p[-5] = 0xE9;
+    *reinterpret_cast<LONG*>(p - 4) =
+        static_cast<LONG>(static_cast<unsigned char*>(hook) - p);
+    *reinterpret_cast<volatile WORD*>(p) = 0xF9EB;  // jmp short -7
+    VirtualProtect(p - 5, 7, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), p - 5, 7);
+    return p + 2;
+}
+
+// The Direct3D 7 runtime gives every device its own copy of the vtable and
+// can switch a device to another copy, so the trace hooks the shared
+// functions themselves (once) instead of vtable slots.
+bool g_hot_patched[48] = {};
+
+void PatchTrace(void** vtable, int index, void* hook, void** original) {
+    if (g_hot_patched[index] || vtable[index] == hook) {
+        return;
+    }
+    if (!*original) {
+        void* resume = HotPatch(vtable[index], hook);
+        if (resume) {
+            *original = resume;
+            g_hot_patched[index] = true;
+            Log("d3d trace: slot %d hot-patched at %p\n", index, vtable[index]);
+            return;
+        }
+        *original = vtable[index];
+        Log("d3d trace: slot %d is vtable-patched (no hot-patch layout)\n", index);
+    }
+    PatchSlot(vtable, index, hook);
+}
+
 
 HRESULT WINAPI Hook_D3DCreateDevice(void* d3d, REFCLSID clsid, IDirectDrawSurface7* target,
                                     void** device) {
@@ -808,12 +1576,59 @@ HRESULT WINAPI Hook_D3DCreateDevice(void* d3d, REFCLSID clsid, IDirectDrawSurfac
             const bool ok = PatchSlot(vtable, 10, reinterpret_cast<void*>(&Hook_D3DClear));
             Log("d3d device created: Clear hook %s\n", ok ? "ok" : "failed");
         }
+        if (g_d3d_trace) {
+            PatchTraceDevice(*device);
+            ++g_draw_counts[5];
+            Log("d3d device %p vtable %p clsid %08lX via d3d %p (vtable %p); DP %p DIP %p\n",
+                *device, vtable, clsid.Data1, d3d, *reinterpret_cast<void***>(d3d), vtable[25],
+                vtable[26]);
+            static bool caps_logged = false;
+            if (!caps_logged) {
+                caps_logged = true;
+                LogDeviceCaps(*device);
+            }
+        }
     }
     return result;
 }
 
+// Patches the trace slots on the vtable a device currently uses. Called at
+// device creation and from the hot-patched SetTexture/SetTextureStageState
+// hooks, which see every device even after the runtime switched its vtable.
+void PatchTraceDevice(void* device) {
+    void** vtable = *reinterpret_cast<void***>(device);
+    if (vtable[26] == reinterpret_cast<void*>(&Hook_DrawIndexedPrimitive)) {
+        return;
+    }
+    PatchTrace(vtable, 37, reinterpret_cast<void*>(&Hook_SetTextureStageState),
+               reinterpret_cast<void**>(&g_original_set_tss));
+    PatchTrace(vtable, 35, reinterpret_cast<void*>(&Hook_SetTexture),
+               reinterpret_cast<void**>(&g_original_set_texture));
+    PatchTrace(vtable, 20, reinterpret_cast<void*>(&Hook_SetRenderState),
+               reinterpret_cast<void**>(&g_original_set_render_state));
+    PatchTrace(vtable, 25, reinterpret_cast<void*>(&Hook_DrawPrimitive),
+               reinterpret_cast<void**>(&g_original_draw_prim));
+    PatchTrace(vtable, 38, reinterpret_cast<void*>(&Hook_ValidateDevice),
+               reinterpret_cast<void**>(&g_original_validate));
+    PatchTrace(vtable, 31, reinterpret_cast<void*>(&Hook_DrawPrimitiveVB),
+               reinterpret_cast<void**>(&g_original_draw_prim_vb));
+    PatchTrace(vtable, 32, reinterpret_cast<void*>(&Hook_DrawIndexedPrimitiveVB),
+               reinterpret_cast<void**>(&g_original_draw_idx_vb));
+    PatchTrace(vtable, 26, reinterpret_cast<void*>(&Hook_DrawIndexedPrimitive),
+               reinterpret_cast<void**>(&g_original_draw_idx));
+    static int logged = 0;
+    if (logged < 16) {
+        ++logged;
+        Log("d3d trace: device %p vtable %p patched\n", device, vtable);
+    }
+}
+
 HRESULT WINAPI Hook_DDQueryInterface(void* self, REFIID iid, void** out) {
     HRESULT result = g_original_dd_qi(self, iid, out);
+    if (g_d3d_trace && SUCCEEDED(result) && out && *out) {
+        Log("DD QI %p iid %08lX -> %p vtable %p\n", self, iid.Data1, *out,
+            *reinterpret_cast<void***>(*out));
+    }
     if (SUCCEEDED(result) && out && *out && IsEqualGUID(iid, kIID_IDirect3D7)) {
         void** vtable = *reinterpret_cast<void***>(*out);
         if (vtable[4] != reinterpret_cast<void*>(&Hook_D3DCreateDevice)) {
@@ -846,6 +1661,8 @@ void PatchDirectDrawVtable(IDirectDraw7* ddraw) {
     patched[14] = reinterpret_cast<void*>(&Hook_GetGDISurface);
     g_original_dd_qi = reinterpret_cast<QueryInterface_t>(g_original_dd_vtable[0]);
     patched[0] = reinterpret_cast<void*>(&Hook_DDQueryInterface);
+    g_original_get_vidmem = reinterpret_cast<GetAvailableVidMem_t>(g_original_dd_vtable[23]);
+    patched[23] = reinterpret_cast<void*>(&Hook_GetAvailableVidMem);
 
     DWORD old_protect = 0;
     if (!VirtualProtect(vtable, sizeof(patched), PAGE_READWRITE, &old_protect)) {
@@ -962,6 +1779,11 @@ extern "C" HRESULT WINAPI Proxy_DirectDrawCreate(GUID* guid, IDirectDraw** out,
     HRESULT result = fn(guid, out, outer);
     if (SUCCEEDED(result) && out && *out) {
         PatchDirectDrawVtable(reinterpret_cast<IDirectDraw7*>(*out));
+        if (g_d3d_trace) {
+            void** vt = *reinterpret_cast<void***>(*out);
+            Log("DirectDrawCreate -> %p vtable %p (QI slot %s)\n", *out, vt,
+                vt[0] == reinterpret_cast<void*>(&Hook_DDQueryInterface) ? "hooked" : "NOT hooked");
+        }
     }
     return result;
 }
@@ -976,6 +1798,11 @@ extern "C" HRESULT WINAPI Proxy_DirectDrawCreateEx(GUID* guid, void** out,
     HRESULT result = fn(guid, out, iid, outer);
     if (SUCCEEDED(result) && out && *out) {
         PatchDirectDrawVtable(reinterpret_cast<IDirectDraw7*>(*out));
+        if (g_d3d_trace) {
+            void** vt = *reinterpret_cast<void***>(*out);
+            Log("DirectDrawCreateEx -> %p vtable %p (QI slot %s)\n", *out, vt,
+                vt[0] == reinterpret_cast<void*>(&Hook_DDQueryInterface) ? "hooked" : "NOT hooked");
+        }
     }
     return result;
 }

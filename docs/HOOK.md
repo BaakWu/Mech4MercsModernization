@@ -127,14 +127,30 @@ behaves the same):
   Clear fails, retries without the stencil flag and then target-only; a
   depth-only Clear on a target without depth is a no-op. `[display]
   clear_fix=0` disables it.
+- **Depth buffer not bound (see-through terrain, grey sheets).** GameOS
+  attaches the depth buffer to the render target *after* creating the
+  Direct3D device. A DX7 device binds the depth buffer attached to its render
+  target only at creation or `SetRenderTarget`, so the shell and mission
+  devices rendered with no depth test at all (geometry in draw order) and
+  every depth Clear failed with `D3DERR_ZBUFFER_NOTPRESENT`. In the Clear
+  hook, when that error occurs and the render target has a depth buffer
+  attached, the proxy calls `SetRenderTarget` with the same target (binds it)
+  and retries. Once per device; afterwards Clear succeeds. `[display]
+  depth_fix=0` disables it.
 - **Depth buffer precision.** GameOS first asks for a 32-bit depth buffer with
   the Z bits in the high 24 bits (`dwZBitMask 0xFFFFFF00`, 8 stencil bits).
   Current drivers only offer the standard layout (`0x00FFFFFF`), so the
   request fails with `E_NOTIMPL` and GameOS falls back to **16-bit** depth.
   The proxy retries the failed request as standard D24S8 (or D24X8 if no
   stencil was asked for) and reports the created format back. `[display]
-  zbuffer_fix=0` disables it. This did **not** remove the flat translucent
-  terrain sheets seen in missions (`docs/KNOWN-ISSUES.md`).
+  zbuffer_fix=0` disables it.
+- The Direct3D 7 runtime gives each device its own vtable copy and can switch
+  a device to another copy; the production hooks only rely on the `Clear`
+  slot (verified to stay hooked on the mission device). The development trace
+  (`[debug] d3d_trace=1`) hot-patches `SetTexture`/`SetTextureStageState`
+  and re-patches the current vtable from there; it logs render states, draw
+  categories, texture checksums, and supports a draw filter and a one-frame
+  pixel probe through `mw4hook-d3dfilter.txt` (see `ddraw_proxy.cpp`).
 
 ### Selected resolution
 
@@ -201,6 +217,7 @@ enabled=1     ; mission size, 32-bit, never exclusive fullscreen
 checkbox=1    ; add the Windowed checkbox to Options > Video
 clear_fix=1   ; (default, not in the shipped ini) stop the per-frame rebuild
 zbuffer_fix=1 ; (default, not in the shipped ini) 24-bit depth instead of 16
+depth_fix=1   ; (default, not in the shipped ini) bind the attached depth buffer
 [frontend]
 stretch=1     ; scale the picture into the window
 [log]
