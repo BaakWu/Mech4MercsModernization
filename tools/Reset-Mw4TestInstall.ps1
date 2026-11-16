@@ -50,8 +50,15 @@ if (-not $SevenZipPath) {
     }
 }
 
+# Fall back to Windows' built-in tar.exe (libarchive), which reads RAR.
+$tarPath = Join-Path $env:SystemRoot 'System32\tar.exe'
+$useTar = $false
 if (-not $SevenZipPath -or -not (Test-Path -LiteralPath $SevenZipPath -PathType Leaf)) {
-    throw '7-Zip was not found. Pass -SevenZipPath "C:\path\to\7z.exe".'
+    if (Test-Path -LiteralPath $tarPath -PathType Leaf) {
+        $useTar = $true
+    } else {
+        throw '7-Zip was not found and tar.exe is unavailable. Pass -SevenZipPath "C:\path\to\7z.exe".'
+    }
 }
 
 $beforeHash = (Get-FileHash -LiteralPath $RarPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -87,10 +94,17 @@ try {
     }
 
     Write-Output "Extracting $RarPath to staging..."
-    $output = & $SevenZipPath x -y ("-o$staging") $RarPath 2>&1
+    if ($useTar) {
+        # Read-only: tar extracts into the staging folder and never writes the archive.
+        $output = & $tarPath -xf $RarPath -C $staging 2>&1
+        $tool = 'tar'
+    } else {
+        $output = & $SevenZipPath x -y ("-o$staging") $RarPath 2>&1
+        $tool = '7-Zip'
+    }
     if ($LASTEXITCODE -ne 0) {
         $output | Select-Object -Last 40 | Out-Host
-        throw "7-Zip extraction failed with exit code $LASTEXITCODE."
+        throw "$tool extraction failed with exit code $LASTEXITCODE."
     }
 
     $extractedRoot = Join-Path $staging 'MekTek'

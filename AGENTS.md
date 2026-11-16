@@ -437,17 +437,19 @@ High-value files:
     `mercsshellscripts\OM_Video.script` in memory after it is decompressed
     from `RESOURCE\props.mw4`. The shell UI is gosScript source; it is not in
     `core.mw4` (an earlier note here was wrong).
-  - Toggling switches windowed <-> fullscreen without a restart through a
-    detour on GameOS `gos_SetScreenMode` (3.1c `0x0070F8B0`); stored as
-    `[graphics options] windowed=` in `options.ini`; the launch-time
-    `-window` switch follows the setting (one relaunch if needed).
-  - The frontend runs at the selected resolution in both modes, scaled to a
-    centered 4:3 viewport; `getresx()`/`getresy()` report 800x600 to the
-    shell scripts; the cursor is mapped to the scaled picture.
-  - Resolution changes apply immediately; 16-bit requests and the
-    fullscreen 16-bit fallbacks are raised to 32-bit.
-  - Verified in-process from a fresh extraction; AntiHack/multiplayer and the
-    100-cycle test are still open.
+  - Windowed on = framed window at the selected resolution; Windowed off =
+    **borderless fullscreen** (monitor-sized borderless window, no display
+    mode change). Exclusive fullscreen is never used: its 800x600/640x480
+    mode switches fail on current Windows/drivers (stock game too) and
+    GameOS falls back to a window. Checkbox and Alt+Enter switch instantly;
+    stored as `[graphics options] windowed=` in `options.ini`. The game
+    always runs on GameOS' windowed path (`-window`, one relaunch if missing).
+  - Menus, MechLab and movies render at their native 800x600 and are scaled
+    into the window (aspect kept); missions render at the selected resolution
+    (scaled only in borderless). The cursor is mapped to the scaled picture.
+  - 16-bit requests and the fullscreen 16-bit fallbacks are raised to 32-bit.
+  - Verified in-process from a fresh extraction; AntiHack/multiplayer, audio
+    and the 100-cycle test are still open (`docs/KNOWN-ISSUES.md`).
 - `MW4Mercs.exe` is unchanged on disk; all code changes are in memory and
   located by unique byte patterns (the old fixed 800x600 immediate patches
   were removed; one of them also turned the 800x600 menu entry into 1024x768).
@@ -455,8 +457,8 @@ High-value files:
   125% display scaling the client is a true 1024x768 physical area; the extra
   scaled band is gone. This also removes the virtualized cursor mismatch that
   contributed to the Windows-scaling torso drift.
-- The 2002 frontend shell still generates 800x600; the `ddraw.dll` proxy
-  scales it (windowed: `Blt`; fullscreen: `Flip`) and skips mission frames.
+- The 2002 frontend shell renders 800x600; the `ddraw.dll` proxy scales the
+  windowed present into the window (GDI for menus, DirectDraw for missions).
   The shell hit-tests in render pixels, so the cursor is mapped into the
   800x600 shell space (`src/hook/cursor.cpp`); before that mapping the scaled
   menus were not actually aligned with the cursor.

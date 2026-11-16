@@ -1,22 +1,19 @@
-// ddraw.dll proxy: scale the 800x600 shell to the selected resolution.
+// ddraw.dll proxy: scale the windowed picture to the window size.
 //
-// The display controller (dinput proxy, display.cpp) runs the frontend at the
-// selected resolution, but the 2002 shell (main menu, MechLab, options, the
-// in-mission options overlay, ...) is laid out for 800x600 and draws into the
-// top-left of the render surface. This proxy patches the real DirectDraw
-// surface vtable and scales that 800x600 area into the largest centered 4:3
-// viewport of the window (black bars for other aspect ratios, so the original
-// 4:3 presentation is kept):
+// In windowed mode the window's client area is the selected resolution
+// (window.cpp), while the game renders at its own size: 800x600 for the 2002
+// shell (menus, MechLab, movies, the in-mission options overlay) and the
+// selected size in missions. This proxy patches the real DirectDraw surface
+// vtable; when the present (a Blt onto the primary surface) does not match
+// the client area, the picture is drawn scaled into the client with its
+// aspect ratio kept and black bars where it does not fill. Mission frames
+// already match and pass through unchanged.
 //
-//   - windowed: IDirectDrawSurface7::Blt onto the primary is replaced by a
-//     GDI StretchBlt into the client area,
-//   - fullscreen: IDirectDrawSurface7::Flip scales the back buffer in place,
-//     then restores the next back buffer to the unscaled shell image.
+// In fullscreen the menus use the original 800x600 display mode and nothing
+// is scaled.
 //
-// Whether a frame is a shell frame comes from the dinput proxy
-// (Mw4ShellMode); without it, a black border outside 800x600 decides.
-// Mission frames pass through unchanged. The viewport is exported
-// (Mw4FrontendViewport) so the cursor can be mapped to match.
+// The scaled viewport is exported (Mw4FrontendViewport) while the shell is
+// shown, so the dinput proxy can map the cursor to match.
 //
 // Development only ([debug] automation=1): mw4hook-shot.req captures the
 // presented frame to a BMP.
@@ -143,18 +140,16 @@ bool g_last_blt_stretched = false;
 RECT g_last_stretch_src = {};
 RECT g_last_stretch_view = {};
 
-constexpr int kShellWidth = 800;
-constexpr int kShellHeight = 600;
-
-// Largest 4:3 rectangle centered in width x height (the whole area when the
-// aspect already matches within a pixel or two).
-RECT FitShell(int width, int height) {
+// Largest rectangle with the content's aspect ratio centered in width x
+// height (the whole area when the aspect already matches within a pixel or
+// two).
+RECT FitAspect(int width, int height, int content_w, int content_h) {
     int view_w = width;
     int view_h = height;
-    if (static_cast<long long>(width) * 3 > static_cast<long long>(height) * 4) {
-        view_w = MulDiv(height, 4, 3);
+    if (static_cast<long long>(width) * content_h > static_cast<long long>(height) * content_w) {
+        view_w = MulDiv(height, content_w, content_h);
     } else {
-        view_h = MulDiv(width, 3, 4);
+        view_h = MulDiv(width, content_h, content_w);
     }
     if (width - view_w <= 2) {
         view_w = width;
@@ -190,26 +185,17 @@ int ShellModeFromHook() {
     return fn ? fn() : -1;
 }
 
-bool HasBlackFrontendBorder(HDC dc, int width, int height);
-
-bool IsShellFrame(HDC dc, int width, int height) {
-    const int mode = ShellModeFromHook();
-    if (mode >= 0) {
-        return mode == 1;
-    }
-    return HasBlackFrontendBorder(dc, width, height);
-}
 
 // Shared with the dinput proxy (cursor mapping) through Mw4FrontendViewport.
 CRITICAL_SECTION g_view_lock;
 RECT g_view = {};
-SIZE g_view_client = {};
+SIZE g_view_content = {};  // size of the scaled picture (render pixels)
 DWORD g_view_time = 0;
 
-void PublishFrontendView(const RECT& view, int width, int height) {
+void PublishFrontendView(const RECT& view, int content_w, int content_h) {
     EnterCriticalSection(&g_view_lock);
     g_view = view;
-    g_view_client = {width, height};
+    g_view_content = {content_w, content_h};
     g_view_time = GetTickCount();
     LeaveCriticalSection(&g_view_lock);
 }
@@ -218,44 +204,6 @@ HRESULT WINAPI Hook_GetAttachedSurface(IDirectDrawSurface7* self,
                                        DDSCAPS2* caps,
                                        IDirectDrawSurface7** out);
 
-// The shell draws its 800x600 UI into the top-left of the 1024x768 render
-// surface. A mission fills the surface. The shell's border can contain cursor
-// trails and other sparse marks, so treat the frame as frontend content when
-// the area outside 800x600 is mostly black rather than exactly black. A false
-// negative only leaves the previous 1:1 behaviour; a false positive would
-// crop a mission frame.
-bool HasBlackFrontendBorder(HDC dc, int width, int height) {
-    int sampled = 0;
-    int lit = 0;
-    auto sample = [&](int x, int y) {
-        COLORREF color = GetPixel(dc, x, y);
-        if (color == CLR_INVALID) {
-            return false;
-        }
-        ++sampled;
-        if ((GetRValue(color) | GetGValue(color) | GetBValue(color)) > 24) {
-            ++lit;
-        }
-        return true;
-    };
-    for (int y = 10; y < 600; y += 24) {
-        for (int x = 810; x < width; x += 32) {
-            if (!sample(x, y)) {
-                return false;
-            }
-        }
-    }
-    for (int y = 610; y < height; y += 24) {
-        for (int x = 10; x < width; x += 32) {
-            if (!sample(x, y)) {
-                return false;
-            }
-        }
-    }
-    // A mission fills the border; the shell leaves it black apart from a few
-    // cursor marks.
-    return sampled > 0 && lit * 4 < sampled;
-}
 
 void PatchSurfaceVtable(IDirectDrawSurface7* surface) {
     if (!surface) {
@@ -481,9 +429,8 @@ void MaybeCaptureFrame(IDirectDrawSurface7* self, IDirectDrawSurface7* src,
                 dest_rect->right - origin.x, dest_rect->bottom - origin.y};
     }
     if (stretched_from) {
-        // The scaler drew the shell into a 4:3 viewport inside the present.
-        dest = {dest.left + g_last_stretch_view.left, dest.top + g_last_stretch_view.top,
-                dest.left + g_last_stretch_view.right, dest.top + g_last_stretch_view.bottom};
+        // The scaler drew the picture into this rectangle of the client area.
+        dest = g_last_stretch_view;
     }
     Log("shot: client %dx%d, present %ld,%ld-%ld,%ld\n", width, height, dest.left,
         dest.top, dest.right, dest.bottom);
@@ -502,6 +449,23 @@ HRESULT WINAPI Hook_Blt(IDirectDrawSurface7* self, LPRECT dest_rect,
     return result;
 }
 
+// The window the primary surface presents into (its clipper's window).
+HWND PresentWindow(IDirectDrawSurface7* primary) {
+    IDirectDrawClipper* clipper = nullptr;
+    HWND hwnd = nullptr;
+    if (SUCCEEDED(primary->GetClipper(&clipper)) && clipper) {
+        clipper->GetHWnd(&hwnd);
+        clipper->Release();
+    }
+    return hwnd;
+}
+
+// Windowed present. GameOS blits its render surface onto the primary surface
+// at the window's client origin, sized to its render size (800x600 for the
+// shell). The window client is the selected resolution, so when the two
+// differ the picture is drawn scaled into the client area instead: aspect
+// kept, black bars where it does not fill. Mission frames already match the
+// client and pass through untouched.
 HRESULT WINAPI Hook_BltInner(IDirectDrawSurface7* self, LPRECT dest_rect,
                              IDirectDrawSurface7* src, LPRECT src_rect, DWORD flags,
                              LPDDBLTFX fx) {
@@ -509,82 +473,117 @@ HRESULT WINAPI Hook_BltInner(IDirectDrawSurface7* self, LPRECT dest_rect,
     if (!g_stretch_enabled || !src || !dest_rect) {
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
+    DDSCAPS2 caps{};
+    if (FAILED(self->GetCaps(&caps)) || !(caps.dwCaps & DDSCAPS_PRIMARYSURFACE)) {
+        return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
+    }
+    HWND hwnd = PresentWindow(self);
+    if (!hwnd) {
+        return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
+    }
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    POINT origin = {0, 0};
+    ClientToScreen(hwnd, &origin);
+    const int client_w = client.right;
+    const int client_h = client.bottom;
 
-
-    DDSURFACEDESC2 desc{};
-    desc.dwSize = sizeof(desc);
-    if (FAILED(src->GetSurfaceDesc(&desc))) {
+    RECT content{};
+    if (src_rect) {
+        content = *src_rect;
+    } else {
+        DDSURFACEDESC2 desc{};
+        desc.dwSize = sizeof(desc);
+        if (FAILED(src->GetSurfaceDesc(&desc))) {
+            return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
+        }
+        content = {0, 0, static_cast<LONG>(desc.dwWidth), static_cast<LONG>(desc.dwHeight)};
+    }
+    const int content_w = content.right - content.left;
+    const int content_h = content.bottom - content.top;
+    if (client_w <= 0 || client_h <= 0 || content_w <= 0 || content_h <= 0 ||
+        (content_w == client_w && content_h == client_h)) {
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
 
-    // The shell renders 800x600 into the top-left of a larger render surface
-    // (the display controller runs the frontend at the selected resolution).
-    const int surface_w = static_cast<int>(desc.dwWidth);
-    const int surface_h = static_cast<int>(desc.dwHeight);
-    const int dest_w = dest_rect->right - dest_rect->left;
-    const int dest_h = dest_rect->bottom - dest_rect->top;
-    if (surface_w < kShellWidth || surface_h < kShellHeight ||
-        (surface_w == kShellWidth && surface_h == kShellHeight) ||
-        dest_w <= kShellWidth || dest_h <= kShellHeight) {
-        return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
+    RECT view = FitAspect(client_w, client_h, content_w, content_h);
+    RECT bars[2] = {};
+    if (view.left > 0) {
+        bars[0] = {0, 0, view.left, client_h};
+        bars[1] = {view.right, 0, client_w, client_h};
+    } else if (view.top > 0) {
+        bars[0] = {0, 0, client_w, view.top};
+        bars[1] = {0, view.bottom, client_w, client_h};
+    }
+
+    if (ShellModeFromHook() == 0) {
+        // Mission frames run at full frame rate: let DirectDraw do the stretch
+        // (hardware) and fill the bars with a color-fill blit. The clipper
+        // keeps both inside the window.
+        DDBLTFX fill{};
+        fill.dwSize = sizeof(fill);
+        fill.dwFillColor = 0;
+        for (RECT bar : bars) {
+            if (bar.right > bar.left && bar.bottom > bar.top) {
+                OffsetRect(&bar, origin.x, origin.y);
+                g_original_blt(self, &bar, nullptr, nullptr, DDBLT_COLORFILL | DDBLT_WAIT, &fill);
+            }
+        }
+        RECT target = view;
+        OffsetRect(&target, origin.x, origin.y);
+        HRESULT hr = g_original_blt(self, &target, src, &content, flags, fx);
+        if (SUCCEEDED(hr)) {
+            g_last_blt_stretched = true;
+            g_last_stretch_src = content;
+            g_last_stretch_view = view;
+            PublishFrontendView(view, content_w, content_h);
+        }
+        return hr;
     }
 
     HDC src_dc = nullptr;
     if (FAILED(src->GetDC(&src_dc))) {
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
-    if (!IsShellFrame(src_dc, surface_w, surface_h)) {
-        src->ReleaseDC(src_dc);
-        return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
-    }
-
     HDC dest_dc = nullptr;
     HRESULT dest_result = self->GetDC(&dest_dc);
     if (FAILED(dest_result)) {
         src->ReleaseDC(src_dc);
-        Log("frontend stretch: GetDC(dest) failed 0x%08lX\n", dest_result);
+        Log("present scale: GetDC(primary) failed 0x%08lX\n", dest_result);
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
 
-    // Keep the original 4:3 presentation: fit 800x600 into the destination
-    // and fill any side/top bars with black.
-    RECT view = FitShell(dest_w, dest_h);
-    RECT bars[2] = {};
-    if (view.left > 0) {
-        bars[0] = {0, 0, view.left, dest_h};
-        bars[1] = {view.right, 0, dest_w, dest_h};
-    } else if (view.top > 0) {
-        bars[0] = {0, 0, dest_w, view.top};
-        bars[1] = {0, view.bottom, dest_w, dest_h};
-    }
+    // The primary's DC covers the screen; clip to the client area so nothing
+    // outside the window is touched.
+    IntersectClipRect(dest_dc, origin.x, origin.y, origin.x + client_w, origin.y + client_h);
     for (RECT bar : bars) {
         if (bar.right > bar.left && bar.bottom > bar.top) {
-            OffsetRect(&bar, dest_rect->left, dest_rect->top);
+            OffsetRect(&bar, origin.x, origin.y);
             FillRect(dest_dc, &bar, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         }
     }
     SetStretchBltMode(dest_dc, HALFTONE);
     SetBrushOrgEx(dest_dc, 0, 0, nullptr);
-    BOOL ok = StretchBlt(dest_dc, dest_rect->left + view.left, dest_rect->top + view.top,
-                         view.right - view.left, view.bottom - view.top, src_dc, 0, 0,
-                         kShellWidth, kShellHeight, SRCCOPY);
+    BOOL ok = StretchBlt(dest_dc, origin.x + view.left, origin.y + view.top,
+                         view.right - view.left, view.bottom - view.top, src_dc,
+                         content.left, content.top, content_w, content_h, SRCCOPY);
     self->ReleaseDC(dest_dc);
     src->ReleaseDC(src_dc);
     if (!ok) {
-        Log("frontend stretch: StretchBlt failed (%lu)\n", GetLastError());
+        Log("present scale: StretchBlt failed (%lu)\n", GetLastError());
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
 
     g_last_blt_stretched = true;
-    g_last_stretch_src = {0, 0, kShellWidth, kShellHeight};
+    g_last_stretch_src = content;
     g_last_stretch_view = view;
-    PublishFrontendView(view, dest_w, dest_h);
+    PublishFrontendView(view, content_w, content_h);
     static RECT reported = {};
     if (!EqualRect(&reported, &view)) {
         reported = view;
-        Log("frontend stretch: 800x600 -> %ldx%ld at %ld,%ld in %dx%d\n",
-            view.right - view.left, view.bottom - view.top, view.left, view.top, dest_w,
-            dest_h);
+        Log("present scale: %dx%d -> %ldx%ld at %ld,%ld in %dx%d client\n", content_w,
+            content_h, view.right - view.left, view.bottom - view.top, view.left, view.top,
+            client_w, client_h);
     }
     return DD_OK;
 }
@@ -688,144 +687,46 @@ MW4_DDRAW_THUNK(SetAppCompatData)
 
 namespace {
 
-// Fullscreen presents with Flip: the shell has drawn 800x600 into the
-// top-left of the back buffer. Scale it in place (via a memory copy, since
-// source and destination overlap) before the flip.
-// The last unscaled shell frame. After a scaled flip the buffer that comes
-// back as the back buffer still holds the scaled image; it is restored to
-// what the shell left there (this copy, black elsewhere) so the next frame's
-// border test and any partial redraw see the original layout.
-HBITMAP g_shell_copy = nullptr;
-bool g_flip_scaled = false;
-
-bool ScaleShellInPlace(IDirectDrawSurface7* surface, int width, int height) {
-    HDC dc = nullptr;
-    if (FAILED(surface->GetDC(&dc))) {
-        return false;
-    }
-    bool done = false;
-    if (IsShellFrame(dc, width, height)) {
-        HDC mem = CreateCompatibleDC(dc);
-        if (!g_shell_copy) {
-            g_shell_copy = CreateCompatibleBitmap(dc, kShellWidth, kShellHeight);
-        }
-        HBITMAP copy = g_shell_copy;
-        if (mem && copy) {
-            HGDIOBJ old = SelectObject(mem, copy);
-            BitBlt(mem, 0, 0, kShellWidth, kShellHeight, dc, 0, 0, SRCCOPY);
-            RECT all = {0, 0, width, height};
-            FillRect(dc, &all, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-            RECT view = FitShell(width, height);
-            SetStretchBltMode(dc, HALFTONE);
-            SetBrushOrgEx(dc, 0, 0, nullptr);
-            done = StretchBlt(dc, view.left, view.top, view.right - view.left,
-                              view.bottom - view.top, mem, 0, 0, kShellWidth,
-                              kShellHeight, SRCCOPY) != FALSE;
-            SelectObject(mem, old);
-            if (done) {
-                PublishFrontendView(view, width, height);
-                static RECT reported = {};
-                if (!EqualRect(&reported, &view)) {
-                    reported = view;
-                    Log("frontend stretch (flip): 800x600 -> %ldx%ld at %ld,%ld in %dx%d\n",
-                        view.right - view.left, view.bottom - view.top, view.left,
-                        view.top, width, height);
-                }
-            }
-        }
-        if (mem) {
-            DeleteDC(mem);
-        }
-    }
-    surface->ReleaseDC(dc);
-    return done;
-}
-
-void RestoreShellBackBuffer(IDirectDrawSurface7* surface, int width, int height) {
-    HDC dc = nullptr;
-    if (!g_shell_copy || FAILED(surface->GetDC(&dc))) {
-        return;
-    }
-    RECT all = {0, 0, width, height};
-    FillRect(dc, &all, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-    HDC mem = CreateCompatibleDC(dc);
-    if (mem) {
-        HGDIOBJ old = SelectObject(mem, g_shell_copy);
-        BitBlt(dc, 0, 0, kShellWidth, kShellHeight, mem, 0, 0, SRCCOPY);
-        SelectObject(mem, old);
-        DeleteDC(mem);
-    }
-    surface->ReleaseDC(dc);
-}
-
+// Fullscreen presents with Flip. The menus use the original 800x600 display
+// mode there, so nothing is scaled; the hook only serves frame capture.
 HRESULT WINAPI Hook_Flip(IDirectDrawSurface7* self, IDirectDrawSurface7* target,
                          DWORD flags) {
-    IDirectDrawSurface7* back = target;
-    bool release = false;
-    int back_w = 0;
-    int back_h = 0;
-    g_flip_scaled = false;
-    if (!back) {
-        DDSCAPS2 caps{};
-        caps.dwCaps = DDSCAPS_BACKBUFFER;
-        if (SUCCEEDED(self->GetAttachedSurface(&caps, &back))) {
-            release = true;
-        } else {
-            back = nullptr;
-        }
-    }
-    if (back) {
-        DDSURFACEDESC2 desc{};
-        desc.dwSize = sizeof(desc);
-        if (SUCCEEDED(back->GetSurfaceDesc(&desc))) {
-            const int width = static_cast<int>(desc.dwWidth);
-            const int height = static_cast<int>(desc.dwHeight);
-            if (g_stretch_enabled &&
-                ((width > kShellWidth && height >= kShellHeight) ||
-                 (width >= kShellWidth && height > kShellHeight))) {
-                g_flip_scaled = ScaleShellInPlace(back, width, height);
-                back_w = width;
-                back_h = height;
+    if (g_capture_enabled) {
+        wchar_t path[MAX_PATH];
+        if (TakeShotRequest(path, MAX_PATH)) {
+            IDirectDrawSurface7* back = target;
+            bool release = false;
+            if (!back) {
+                DDSCAPS2 caps{};
+                caps.dwCaps = DDSCAPS_BACKBUFFER;
+                release = SUCCEEDED(self->GetAttachedSurface(&caps, &back)) && back;
             }
-            if (g_capture_enabled) {
-                wchar_t path[MAX_PATH];
-                if (TakeShotRequest(path, MAX_PATH)) {
-                    HDC dc = nullptr;
-                    if (SUCCEEDED(back->GetDC(&dc))) {
-                        RECT all = {0, 0, width, height};
-                        WriteShot(path, dc, width, height, all, all);
-                        back->ReleaseDC(dc);
-                    }
-                }
+            DDSURFACEDESC2 desc{};
+            desc.dwSize = sizeof(desc);
+            HDC dc = nullptr;
+            if (back && SUCCEEDED(back->GetSurfaceDesc(&desc)) && SUCCEEDED(back->GetDC(&dc))) {
+                RECT all = {0, 0, static_cast<LONG>(desc.dwWidth), static_cast<LONG>(desc.dwHeight)};
+                WriteShot(path, dc, all.right, all.bottom, all, all);
+                back->ReleaseDC(dc);
+            }
+            if (release) {
+                back->Release();
             }
         }
-        if (release) {
-            back->Release();
-        }
     }
-    HRESULT result = g_original_flip(self, target, flags);
-    if (SUCCEEDED(result) && g_flip_scaled && !target) {
-        DDSCAPS2 caps{};
-        caps.dwCaps = DDSCAPS_BACKBUFFER;
-        IDirectDrawSurface7* next = nullptr;
-        if (SUCCEEDED(self->GetAttachedSurface(&caps, &next)) && next) {
-            RestoreShellBackBuffer(next, back_w, back_h);
-            next->Release();
-        }
-    }
-    return result;
+    return g_original_flip(self, target, flags);
 }
 
 }  // namespace
-// Reports where the scaled 800x600 shell was last drawn, relative to the
-// window client area. Returns FALSE when the last frames were not frontend
-// frames (in mission), so callers leave the cursor untouched.
-extern "C" BOOL WINAPI Mw4FrontendViewport(RECT* view, SIZE* client) {
+// Reports where the picture was last drawn scaled (view, client coordinates)
+// and its own size in render pixels. Returns FALSE when recent frames were not
+// scaled, so callers leave the cursor untouched.
+extern "C" BOOL WINAPI Mw4FrontendViewport(RECT* view, SIZE* content) {
     EnterCriticalSection(&g_view_lock);
     const bool recent = g_view_time != 0 && GetTickCount() - g_view_time < 500;
     if (recent) {
         *view = g_view;
-        *client = g_view_client;
+        *content = g_view_content;
     }
     LeaveCriticalSection(&g_view_lock);
     return recent ? TRUE : FALSE;

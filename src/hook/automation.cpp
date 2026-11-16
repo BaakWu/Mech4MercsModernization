@@ -143,6 +143,15 @@ void Execute(const std::string& line) {
             PostMessageA(hwnd, WM_ACTIVATE, WA_ACTIVE, 0);
         }
         Sleep(300);
+    } else if (_stricmp(verb, "altenter") == 0) {
+        // Alt+Enter as the window procedure sees it (context bit 29 = Alt).
+        HWND hwnd = MainWindow();
+        if (hwnd) {
+            const LPARAM down = 1 | (0x1C << 16) | (1 << 29);
+            PostMessageA(hwnd, WM_SYSKEYDOWN, VK_RETURN, down);
+            PostMessageA(hwnd, WM_SYSKEYUP, VK_RETURN, down | 0xC0000000);
+        }
+        Sleep(300);
     } else if (_stricmp(verb, "setwindowed") == 0) {
         // Calls the same backend as the Video checkbox (diagnostics only).
         SetWindowedMode(atoi(rest) != 0);

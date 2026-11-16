@@ -44,7 +44,6 @@ bool InstallDisplayHooks();
 bool DesiredWindowed();
 int ShellMode();
 void SetWindowedMode(bool windowed);
-void NoteAppliedMode(bool windowed);
 void SelectedSize(int* width, int* height);
 bool GameFullscreen();
 
@@ -67,6 +66,9 @@ const Config& GetConfig();
 
 // The game's top-level window once it has been created, else nullptr.
 HWND MainWindow();
+
+// Re-apply the main window layout for the Windowed setting / resolution.
+void ApplyWindowLayout();
 
 // Development-only test automation (see automation.cpp).
 void AutomationInit();

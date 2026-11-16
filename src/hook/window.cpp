@@ -8,11 +8,18 @@
 // gos_SetScreenMode.
 //
 // Window hooks (user32 imports of MW4Mercs.exe):
-//   - CreateWindowExA: create the main window at the selected client size.
-//   - SetWindowPos: when GameOS resizes the window for windowed mode, restore
+//   - CreateWindowExA: create the main window at the selected client size and
+//     subclass it to catch Alt+Enter.
+//   - SetWindowPos: when GameOS sizes the window for windowed mode, restore
 //     the framed style if the window is still the fullscreen popup, keep the
-//     client area at the requested size, and center it on the primary
-//     monitor's work area.
+//     client area at the selected resolution (the shell itself renders at its
+//     native 800x600; the ddraw proxy scales it into the window), and center
+//     it on the primary monitor's work area when its size changes.
+//
+// Alt+Enter: GameOS has its own toggle that sets its go-windowed or
+// go-fullscreen flag directly, bypassing gos_SetScreenMode. The window
+// procedure is subclassed so Alt+Enter flips the Windowed setting instead
+// (same path as the checkbox) and GameOS' own toggle never runs.
 #include "hook.h"
 
 #include <tlhelp32.h>
@@ -34,6 +41,7 @@ SetWindowPos_t g_SetWindowPos = nullptr;
 SetWindowLongA_t g_SetWindowLongA = nullptr;
 
 HWND g_main_window = nullptr;
+WNDPROC g_game_wndproc = nullptr;
 DWORD g_framed_style = WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME);
 bool g_windowed_launch = false;
 
@@ -99,31 +107,113 @@ POINT CenteredOrigin(SIZE size) {
     return p;
 }
 
+LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    const bool alt_enter = (msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP ||
+                            msg == WM_SYSCHAR) &&
+                           wparam == VK_RETURN && (lparam & (1 << 29));
+    if (alt_enter && GetConfig().display_enabled) {
+        const bool first_press = msg == WM_SYSKEYDOWN && !(lparam & (1 << 30));
+        if (first_press) {
+            Log("Alt+Enter: Windowed -> %d\n", DesiredWindowed() ? 0 : 1);
+            SetWindowedMode(!DesiredWindowed());
+        }
+        return 0;  // GameOS' own toggle must not run
+    }
+    return CallWindowProcA(g_game_wndproc, hwnd, msg, wparam, lparam);
+}
+
+// Where the main window goes for the current setting.
+//   Windowed on:  framed window, client = selected resolution, centered on the
+//                 primary monitor (kept where the player moved it unless its
+//                 size or frame changes).
+//   Windowed off: borderless window covering the whole primary monitor at its
+//                 native resolution. The display mode is never changed; the
+//                 ddraw proxy scales the picture to fit.
+struct Layout {
+    DWORD style;
+    RECT rect;  // outer window rectangle, screen coordinates
+};
+
+RECT PrimaryMonitorRect() {
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    const POINT origin = {0, 0};
+    if (GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &info)) {
+        return info.rcMonitor;
+    }
+    return {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+}
+
+Layout ComputeLayout(HWND hwnd) {
+    Layout layout{};
+    if (!DesiredWindowed()) {
+        layout.style = WS_POPUP | WS_VISIBLE;
+        layout.rect = PrimaryMonitorRect();
+        return layout;
+    }
+    int client_w = 0;
+    int client_h = 0;
+    SelectedSize(&client_w, &client_h);
+    layout.style = g_framed_style | WS_VISIBLE;
+    SIZE outer = OuterSize(layout.style, client_w, client_h);
+    POINT origin = CenteredOrigin(outer);
+    if (hwnd) {
+        // Keep a window the player moved where it is, unless the frame or the
+        // size changes.
+        const DWORD current_style = static_cast<DWORD>(GetWindowLongA(hwnd, GWL_STYLE));
+        RECT client{};
+        RECT window{};
+        GetClientRect(hwnd, &client);
+        GetWindowRect(hwnd, &window);
+        if (!(current_style & WS_POPUP) && client.right == client_w &&
+            client.bottom == client_h) {
+            origin = {window.left, window.top};
+        }
+    }
+    layout.rect = {origin.x, origin.y, origin.x + outer.cx, origin.y + outer.cy};
+    return layout;
+}
+
+void ApplyLayout(HWND hwnd, HWND after, UINT flags) {
+    const Layout layout = ComputeLayout(hwnd);
+    const DWORD style = static_cast<DWORD>(GetWindowLongA(hwnd, GWL_STYLE));
+    if ((style & ~WS_VISIBLE) != (layout.style & ~WS_VISIBLE)) {
+        g_SetWindowLongA(hwnd, GWL_STYLE,
+                         static_cast<LONG>(layout.style | (style & WS_VISIBLE)));
+        flags |= SWP_FRAMECHANGED;
+    }
+    flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
+    g_SetWindowPos(hwnd, after, layout.rect.left, layout.rect.top,
+                   layout.rect.right - layout.rect.left,
+                   layout.rect.bottom - layout.rect.top, flags);
+    LogRect(DesiredWindowed() ? "main window (windowed)" : "main window (borderless)", hwnd);
+}
+
 HWND WINAPI Hook_CreateWindowExA(DWORD ex_style, LPCSTR class_name,
                                  LPCSTR window_name, DWORD style, int x, int y,
                                  int width, int height, HWND parent, HMENU menu,
                                  HINSTANCE instance, LPVOID param) {
     const bool main = parent == nullptr && IsGameWindowClass(class_name) && !g_main_window;
+    if (main && !(style & WS_POPUP)) {
+        g_framed_style = style & ~WS_VISIBLE;
+    }
     if (main && GetConfig().window_enabled && g_windowed_launch) {
-        int sel_w = 0;
-        int sel_h = 0;
-        SelectedSize(&sel_w, &sel_h);
-        SIZE outer = OuterSize(style, sel_w, sel_h);
-        POINT origin = CenteredOrigin(outer);
-        Log("CreateWindowExA main %dx%d -> %ldx%ld outer (%dx%d client) at %ld,%ld\n",
-            width, height, outer.cx, outer.cy, sel_w, sel_h, origin.x, origin.y);
-        width = outer.cx;
-        height = outer.cy;
-        x = origin.x;
-        y = origin.y;
+        const Layout layout = ComputeLayout(nullptr);
+        style = (style & WS_VISIBLE) | (layout.style & ~WS_VISIBLE);
+        Log("CreateWindowExA main %dx%d -> %ldx%ld at %ld,%ld (%s)\n", width, height,
+            layout.rect.right - layout.rect.left, layout.rect.bottom - layout.rect.top,
+            layout.rect.left, layout.rect.top, DesiredWindowed() ? "windowed" : "borderless");
+        x = layout.rect.left;
+        y = layout.rect.top;
+        width = layout.rect.right - layout.rect.left;
+        height = layout.rect.bottom - layout.rect.top;
     }
     HWND hwnd = g_CreateWindowExA(ex_style, class_name, window_name, style, x, y,
                                   width, height, parent, menu, instance, param);
     if (main && hwnd) {
         g_main_window = hwnd;
-        if (!(style & WS_POPUP)) {
-            g_framed_style = style & ~WS_VISIBLE;
-        }
+        g_game_wndproc = reinterpret_cast<WNDPROC>(SetWindowLongPtrA(
+            hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&MainWindowProc)));
         LogRect("main window created", hwnd);
     }
     return hwnd;
@@ -131,49 +221,12 @@ HWND WINAPI Hook_CreateWindowExA(DWORD ex_style, LPCSTR class_name,
 
 BOOL WINAPI Hook_SetWindowPos(HWND hwnd, HWND after, int x, int y, int cx, int cy,
                               UINT flags) {
-    if (hwnd == g_main_window && !GameFullscreen() && !(flags & SWP_NOSIZE)) {
-        // Only GameOS' windowed setup resizes the main window.
-        NoteAppliedMode(true);
-    }
     if (hwnd == g_main_window && GetConfig().window_enabled && !GameFullscreen() &&
         !(flags & SWP_NOSIZE) && cx > 0 && cy > 0) {
-        // GameOS sized cx/cy with AdjustWindowRect for the current style.
-        DWORD style = static_cast<DWORD>(GetWindowLongA(hwnd, GWL_STYLE));
-        RECT probe = {0, 0, 0, 0};
-        AdjustWindowRect(&probe, style, FALSE);
-        int client_w = cx - (probe.right - probe.left);
-        int client_h = cy - (probe.bottom - probe.top);
-        bool restored = false;
-        if (style & WS_POPUP) {
-            // Returning from fullscreen: put the normal window frame back.
-            DWORD framed = g_framed_style | (style & WS_VISIBLE);
-            g_SetWindowLongA(hwnd, GWL_STYLE, static_cast<LONG>(framed));
-            style = framed;
-            flags |= SWP_FRAMECHANGED;
-            restored = true;
-            Log("SetWindowPos: restored framed style 0x%08lX\n", framed);
-        }
-        SIZE outer = OuterSize(style, client_w, client_h);
-        RECT current{};
-        GetClientRect(hwnd, &current);
-        // Re-center only when the size or frame changes; GameOS passes
-        // SWP_FRAMECHANGED on every mode set, and a window the player moved
-        // should stay where it is.
-        const bool resized =
-            restored || current.right != client_w || current.bottom != client_h;
-        if (resized) {
-            POINT origin = CenteredOrigin(outer);
-            x = origin.x;
-            y = origin.y;
-            flags &= ~SWP_NOMOVE;
-        }
-        Log("SetWindowPos main: client %dx%d outer %ldx%ld%s\n", client_w, client_h,
-            outer.cx, outer.cy, resized ? " (centered)" : "");
-        cx = outer.cx;
-        cy = outer.cy;
-        BOOL result = g_SetWindowPos(hwnd, after, x, y, cx, cy, flags);
-        LogRect("main window", hwnd);
-        return result;
+        // GameOS' windowed setup sizes the window to its render size (800x600
+        // for the shell). The window follows the Windowed setting instead.
+        ApplyLayout(hwnd, after, flags);
+        return TRUE;
     }
     return g_SetWindowPos(hwnd, after, x, y, cx, cy, flags);
 }
@@ -181,10 +234,6 @@ BOOL WINAPI Hook_SetWindowPos(HWND hwnd, HWND after, int x, int y, int cx, int c
 LONG WINAPI Hook_SetWindowLongA(HWND hwnd, int index, LONG value) {
     if (hwnd == g_main_window && index == GWL_STYLE) {
         Log("SetWindowLongA main style=0x%08lX\n", value);
-        if (static_cast<DWORD>(value) & WS_POPUP) {
-            // Only GameOS' fullscreen setup makes the window a popup.
-            NoteAppliedMode(false);
-        }
     }
     return g_SetWindowLongA(hwnd, index, value);
 }
@@ -193,11 +242,23 @@ LONG WINAPI Hook_SetWindowLongA(HWND hwnd, int index, LONG value) {
 
 HWND MainWindow() { return g_main_window; }
 
+// Re-applies the window layout after the Windowed setting or the selected
+// resolution changed. Runs on the game thread (script callback or the window
+// procedure).
+void ApplyWindowLayout() {
+    if (g_main_window && GetConfig().window_enabled && !GameFullscreen()) {
+        ApplyLayout(g_main_window, nullptr, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+}
+
 void EnsureLaunchMode() {
     std::wstring command_line = GetCommandLineW();
     const size_t at = FindWindowSwitch(command_line);
     const bool has_switch = at != std::wstring::npos;
-    const bool want = DesiredWindowed();
+    // Both settings run on GameOS' windowed path: Windowed off is a borderless
+    // window over the whole monitor, not exclusive fullscreen (which changes
+    // the display mode and is unreliable on current Windows/drivers).
+    const bool want = GetConfig().display_enabled ? true : DesiredWindowed();
     g_windowed_launch = has_switch;
     Log("launch: -window %s, Windowed setting %s\n", has_switch ? "present" : "absent",
         want ? "on" : "off");

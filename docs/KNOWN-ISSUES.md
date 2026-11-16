@@ -1,101 +1,92 @@
 # Known issues (windowed-mode / Windowed checkbox work)
 
-Status as of 2026-11-15, branch `windowed-mode`. Reported from a real play
-session on the patched 3.1c install (hook + `mw4patch.exe` from this branch).
-Causes below are **hypotheses** unless marked otherwise; none of these has been
-fixed yet.
+Status as of 2026-11-16, branch `windowed-mode`. Issues 1-4 were reported
+from a play session on 2026-11-15; their status after the follow-up work is
+below.
 
-Scope note: the initial public release is now **only a windowed-mode patch**
-(see `AGENTS.md` section 3). Several items below come from the frontend
-resolution / fullscreen work that goes beyond that scope; the release may ship
-with those parts disabled.
+Scope note: the initial public release is **only a windowed-mode patch**
+(see `AGENTS.md` section 3.0).
 
-## 1. Turning Windowed off does not stick (fullscreen -> windowed)
+## 1. Turning Windowed off did not stick — FIXED
 
-**Observed:** with Windowed unticked (fullscreen), entering MechLab or
-launching an Instant Action mission puts the game back in a window. Audio is
-garbled at the same time (see 4).
+**Was:** with Windowed unticked, entering MechLab or launching a mission put
+the game back in a window.
 
-**Likely cause (our regression):** `NoteAppliedMode()` in
-`src/hook/display.cpp` was added so the checkbox follows GameOS' own Alt+Enter
-toggle. It treats any windowed `SetWindowPos` from GameOS as "the player chose
-windowed" and persists `windowed=true`. GameOS, however, temporarily drops to
-its windowed path while fullscreen during some transitions (the retail oracle
-shows `FUN_0070DFE0` and `FUN_007472A0` calling the windowed setup and later
-the fullscreen setup again). The sync flips the setting during that temporary
-drop, and every later `gos_SetScreenMode` then requests windowed.
+**Causes found (two):**
+- The hook inferred the setting from GameOS window calls (to follow Alt+Enter)
+  and treated GameOS' own temporary windowed drops as "the player chose
+  windowed".
+- Exclusive fullscreen itself is unreliable on current Windows/drivers. On
+  the test machine (2560x1440, AMD) GameOS' 800x600 and 640x480 mode switches
+  fail; it then re-initializes DirectDraw over and over (76 times in one
+  logged run) and falls back to its windowed path, or hangs until Windows
+  closes it. The stock game behaves the same way.
 
-**Next step:** confirm from `mw4hook-<pid>.log` (look for "switched to
-windowed on its own"), then sync only on the Alt+Enter path (the window
-procedure at `0x0072CDA1` sets the go-windowed flag directly) instead of
-inferring intent from window calls.
+**Fix:** "Windowed off" is now **borderless fullscreen**: a borderless window
+covering the monitor at its native resolution, with the picture scaled. The
+display mode is never changed and GameOS is never asked for exclusive
+fullscreen. Only the checkbox and Alt+Enter (now routed to the same setting)
+change it. Verified: MechLab and a mission stay borderless; Alt+Enter toggles
+in a mission.
 
-## 2. Frontend content positioned by the real render size (MechLab mech, FMV)
+## 2. MechLab mech off screen, intro movies off-center — FIXED
 
-**Observed:**
-- MechLab: the 3D mech is drawn partly off screen / cut off on the right; the
-  screen's left edge also looks cropped.
-- Startup FMV (MekTek/MP3.1 logo movies) is off-center and cropped in the
-  1024x768 window.
+**Cause:** the frontend was rendered at the selected resolution while the
+shell is laid out for 800x600; engine-placed content (MechLab 3D view, movie
+player) used the real render size.
 
-**Likely cause (our change):** the frontend now renders at the selected
-resolution (e.g. 1024x768) while the shell is laid out for 800x600, and the
-ddraw proxy scales only the top-left 800x600 area. Script layout was fixed by
-making `getresx()`/`getresy()` report 800x600, but content placed by the
-engine itself (the MechLab 3D viewport/camera and the movie player) still uses
-the real render size (`0x01240668/6C`). It is centered or sized for 1024x768,
-then cut and scaled as if it were 800x600.
+**Fix:** menus, MechLab and movies now render at their native 800x600; only
+the window is larger and the ddraw proxy scales the picture into it. The
+`getresx()`/`getresy()` patch is no longer needed and was removed. Verified:
+intro movie centered and filling the window; MechLab complete with the mech
+centered.
 
-**Options:** run the frontend at 800x600 internally and scale only the
-window/present (the window grows, the game keeps its native shell size; this
-also fits the windowed-only release), or find and adjust the MechLab viewport
-and movie placement code.
+## 3. Rendering artifacts in missions — PRE-EXISTING (not the patch)
 
-## 3. Rendering artifacts in missions (see-through / missing terrain)
+**Observed:** flat grey/white translucent sheets over terrain near the
+horizon, see-through ground in places.
 
-**Observed:** in missions, terrain and buildings show see-through gaps and
-flat white/grey smears (sky showing through the ground, bright bands across
-the terrain near the horizon). Also visible in our own automated mission
-capture at 1280x720.
+**A/B result:** the same mission with every display feature of the hook
+disabled (`[window]`, `[display]`, `[frontend]` off) shows the same artifacts,
+also in an unscaled framed window. The patch does not cause them. Likely the
+DX7 renderer on current drivers (fog/terrain LOD are candidates); outside the
+windowed-mode scope. To confirm on another machine: uninstall the patch and
+run `MW4Mercs.exe -window` into the same mission.
 
-**Cause: unknown.** Not yet established whether the hook causes it. Candidates:
-- pre-existing driver behavior on modern GPUs (first-release item 8 in
-  `AGENTS.md`, "texture mipmap garbage", and the DX7 path in general),
-- the 32-bit enforcement (`bpp` 16 -> 32 and the fullscreen fallback patches),
-- the selected-resolution substitution (mission size / aspect),
-- texture/detail settings in `options.ini` written by the patcher.
+## 4. Audio garbled when the engine starts (MechLab, missions) — OPEN
 
-**Next step:** A/B on a fresh extraction: stock game (no hook), hook with
-`[display] enabled=0`, and the full hook, same mission, same `options.ini`.
+Not reproducible by the automated tests (they cannot listen). Sound starts
+without the old DirectSound error on the new test machine. Fixes 1 and 2
+remove the mode-switch churn and the oversized frontend, both suspects.
 
-## 4. Audio garbled when the engine starts (MechLab, missions)
+**Next step (needs a listener):** retest with this build; if still garbled,
+uninstall the patch and run `MW4Mercs.exe -window` into MechLab/a mission to
+see whether the stock game does the same.
 
-**Observed:** audio becomes garbled as soon as the game moves into the 3D
-engine (MechLab or a mission), in windowed and fullscreen mode.
+## 5. Crash at `0x006FABAA` during a manual session — OPEN
 
-**Cause: unknown.** Our automated tests ran with `-nosound` (this machine
-shows the pre-existing DirectSound `CreateSoundBuffer` / DSERR_BUFFERLOST
-error with sound on), so audio was never exercised. Candidates: the
-mode-switch churn from issue 1, frame pacing changes from the GDI frontend
-scaler, the process relaunch, or a pre-existing modern-Windows DirectSound
-problem.
+Windows Error Reporting logged an access violation at `MW4Mercs.exe+0x2FABAA`
+(`0x006FABAA`, the game's heap allocator reading through a null heap pointer)
+in a session started outside the test harness on 2026-11-15 21:55, shortly
+after GameOS fell back from a failed fullscreen switch. The same location
+crashes when `OM_Video.script` is malformed, but that script was not loaded
+in this session. Unknown trigger; watch for it with the new build.
 
-**Next step:** same A/B as issue 3 with sound enabled, and check whether it
-also happens with the original (pre-branch) hook.
-
-## 5. Smaller items found during testing
+## 6. Smaller items
 
 - Rapid double-clicks on the Windowed checkbox are unverified.
-- Only 5 windowed <-> fullscreen cycles were run (issue #1 asks for 100).
+- The issue's 100 toggle cycles have not been run (borderless toggles no
+  longer change the display mode, so this is now cheap to run).
 - Resolution dropdown: picking an entry after scrolling the list selected
   index 0 in automated tests; this also happens with all display hooks
   disabled (pre-existing, or an artifact of instant cursor jumps).
 - AntiHack and multiplayer join are untested with the detours.
-- The software renderer (renderer 3) is now asked for 32-bit; untested.
+- Mission frames in borderless fullscreen use DirectDraw's stretch filter
+  (driver-dependent); menus use GDI HALFTONE.
 
 ## Test aids
 
 - `[debug] automation=1` + `tools/Send-Mw4Automation.ps1` drive the game and
   capture frames from inside the process (`docs/HOOK.md`).
-- `mw4hook-<pid>.log` records every `gos_SetScreenMode` request with the
-  substituted size and the windowed/fullscreen flags.
+- `mw4hook-<pid>.log` records every `gos_SetScreenMode` request and every
+  window layout change.

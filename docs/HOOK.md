@@ -1,7 +1,7 @@
-# Runtime hook: windowed mode, frontend resolution, Windowed checkbox
+# Runtime hook: windowed mode, borderless fullscreen, Windowed checkbox
 
 Status: **development**. Tracks GitHub issue #1 (Windowed checkbox in the
-Video Options menu).
+Video Options menu). Open problems: `docs/KNOWN-ISSUES.md`.
 
 Target: `MW4Mercs.exe` 3.1c, `51.03.01.0030`, SHA-256
 `72bbb1ba3e5e5e7dc7607ca403f3d9aca301d0b16814a6b577bda7ec5c922b41`.
@@ -14,30 +14,32 @@ memory after the PECompact stub has unpacked the image.
   the same widget, bitmap (`checkbox_15x15_4state.tga`) and label font as
   MekTek's existing "Use Extended Visibility" checkbox. Nothing else on the
   screen moves or is restyled.
-- Unchecking switches to **fullscreen** at the selected resolution; checking
-  returns to a **window** at that resolution. No restart. The box also
-  follows mode changes made without it (GameOS' own Alt+Enter toggle, or a
-  failed fullscreen switch that falls back to a window).
+- **Windowed on:** a framed window whose client area is the selected
+  resolution, centered on the primary monitor (a window the player moved
+  stays put until its size changes).
+- **Windowed off: borderless fullscreen.** A borderless window covering the
+  whole primary monitor at its native resolution. The display mode is never
+  changed. (Exclusive fullscreen is not used: on current Windows/drivers its
+  800x600/640x480 mode switches fail and GameOS falls back to a window, which
+  is what made "fullscreen" revert to windowed.)
+- Switching takes effect immediately, from the checkbox or **Alt+Enter**
+  (GameOS' own Alt+Enter toggle is replaced). Only the player changes the
+  setting.
 - The setting is stored as `windowed=true|false` under `[graphics options]`
   in `options.ini` (missing means `true`) and applied at the next launch.
-- **The frontend runs at the selected resolution** in both modes. The shell is
-  still laid out for 800x600; it is scaled into the largest centered 4:3
-  viewport of the window/screen (black bars for 16:9, 16:10, 5:4, ...), so
-  the original 4:3 look is kept. Cursor, hit areas and script layout
-  (`getresx()`/`getresy()`) match the scaled picture.
-- Choosing a **Resolution** resizes the window immediately (windowed) or
-  switches the display mode (fullscreen). It is saved on **OK**, like every
-  other option. Modes below 800x600 apply to missions only; the shell never
-  renders smaller than its 800x600 layout (as in the original game).
-- The in-mission **pause > Options** overlay (which the game shows in its
-  800x600 "shell" mode) is scaled the same way; missions themselves are
-  untouched.
-- **Never 16-bit:** 16-bit requests are raised to 32-bit, and the two 16-bit
-  fallbacks in the fullscreen setup (software-renderer path and the last-resort
-  640x480x16 attempt) are raised to 32-bit. A fullscreen switch that fails
-  falls back to GameOS' windowed path.
-- The window is centered on the primary monitor's work area when its size or
-  frame changes; a window the player moved stays put otherwise.
+- **Menus, MechLab and movies render at their native 800x600**, exactly as
+  designed, and are scaled into the window (aspect kept, black bars where the
+  window is not 4:3). Their layout, the MechLab mech view and the intro movies
+  are therefore positioned as in the original game.
+- **Missions render at the selected resolution.** In a framed window they fill
+  the client 1:1; in borderless fullscreen DirectDraw scales them to the
+  monitor (aspect kept).
+- The cursor and hit areas match the scaled picture in menus and in scaled
+  missions.
+- Choosing a **Resolution** resizes the window immediately; the mission uses it
+  from the next mission start. It is saved on **OK**, like every other option.
+- **Never 16-bit:** 16-bit requests are raised to 32-bit, and the 16-bit
+  fallbacks in GameOS' (now unused) fullscreen setup are raised to 32-bit.
 - DPI: the process opts out of DPI virtualization, so one game pixel is one
   physical pixel at 125%/150% display scaling.
 
@@ -47,11 +49,10 @@ memory after the PECompact stub has unpacked the image.
 proxy loads before the game parses its command line. A local `version.dll` is
 not loaded, and a local `ddraw.dll` loads too late for startup decisions.
 
-At `DllMain` the proxy reads `windowed` from `options.ini`. If the `-window`
-switch does not match the setting, it relaunches the game once with the switch
-added or removed (an environment guard prevents loops) and the first process
-exits before the game initializes. The patched shortcuts pass `-window`, which
-matches the default.
+The game always runs on GameOS' windowed path. If `-window` is missing, the
+proxy relaunches the game once with it (an environment guard prevents loops);
+the first process exits before the game initializes. The patched shortcuts
+pass `-window` directly.
 
 ## How it works
 
@@ -61,21 +62,45 @@ Every display change in GameOS goes through `gos_SetScreenMode` (12 stdcall
 arguments; retail `FUN_00709F20`, 3.1c `0x0070F8B0`). It only records the
 request and sets a pending flag; the main loop applies it next frame through
 the windowed setup (`0x0070FB90`) or the fullscreen setup (`0x0070FD90`).
-Argument 8 requests fullscreen and argument 10 requests windowed; the game's
-own callers always pass 0 for both.
+Argument 8 requests fullscreen and argument 10 requests windowed. A request
+identical to the current mode is ignored.
 
 The shell always requests 800x600 (state 0xE, also used for the in-mission
 options overlay); a mission requests the configured size (state 0xF).
 
 `display.cpp` detours `gos_SetScreenMode` and:
 
-- replaces the requested size with the selected resolution (shell requests
-  below 800x600 stay 800x600),
+- leaves the shell's 800x600 requests alone,
+- replaces mission requests with the selected resolution,
 - raises 16-bit to 32-bit,
-- sets the fullscreen/windowed request flags from the Windowed setting.
+- never requests exclusive fullscreen (and returns from it if GameOS is ever
+  in it).
 
-Toggling the checkbox re-issues the game's last request through the same
-detour, so the change happens on the next frame without a restart.
+### Window
+
+`window.cpp` owns the main window's style and placement. GameOS' windowed
+setup asks `SetWindowPos` for a client of its render size; the hook replaces
+that with the layout for the setting (framed + selected size, or borderless +
+monitor rectangle). The checkbox, Alt+Enter and Resolution changes apply the
+same layout directly, because a same-size `gos_SetScreenMode` request would be
+ignored by GameOS. The window procedure is subclassed only to catch Alt+Enter.
+
+### Present scaling and cursor
+
+`ddraw.dll` proxy (`ddraw_proxy.cpp`): GameOS presents in windowed mode with a
+`Blt` onto the primary surface at the client origin, sized to its render size.
+When that does not match the client area:
+
+- menus/MechLab/movies (shell mode, low frame rate): GDI `StretchBlt` with
+  HALFTONE filtering into the fitted viewport, black bars filled,
+- missions (full frame rate): DirectDraw's own stretch `Blt` into the viewport
+  and color-fill blits for the bars.
+
+The viewport and the picture size are exported (`Mw4FrontendViewport`).
+GameOS reads the cursor with `GetCursorPos`, normalizes it by the render size,
+and hit-tests in render pixels, so `cursor.cpp` maps the visible position from
+the viewport into the picture's pixels (`SetCursorPos` gets the inverse).
+Unscaled frames leave the cursor untouched.
 
 ### Selected resolution
 
@@ -83,41 +108,13 @@ The Resolution dropdown is filled by `ShellGetSupportedResolutions` from a
 29-entry `(width, height)` table (`0x0081DCC0`). The game's own index-to-size
 map used at mission start (`0x0052C9D6`) disagrees with that table for some
 entries (index 2 shows 960x600 but applies 800x600; index 20 applies nothing),
-so the hook keeps the selected size itself, applies it to every request, keeps
-the game's copy (`0x0081B9EC/F0`) in sync, and writes `screenwidth` /
+so the hook keeps the selected size itself, applies it to mission requests,
+keeps the game's copy (`0x0081B9EC/F0`) in sync, and writes `screenwidth` /
 `screenheight` after the game's own save.
 
 3.1c's `ShellSetOptionValue(MWO_SCREENRESOLUTION)` falls through into the
 `MWO_USEEXTENDEDVISIBILITY` case and overwrites that option with the
 resolution index. The hook preserves Use Extended Visibility across the call.
-
-### Script layout size
-
-The shell scripts lay themselves out with `getresx()`/`getresy()` (about 80
-scripts: centered dialogs, help text, loading screens, the main-menu column).
-These builtins are evaluated inline by the expression interpreter
-(`0x006D1433`) and read the render size directly. The three operands are
-pointed at hook variables that report 800x600 while the game is in shell mode
-and the real size in missions.
-
-### Frontend scaling and cursor
-
-`ddraw.dll` proxy (`ddraw_proxy.cpp`):
-
-- windowed: the present (`Blt` onto the primary) is replaced by a GDI
-  `StretchBlt` of the 800x600 shell area into the 4:3 viewport,
-- fullscreen: `Flip` scales the back buffer in place and restores the next
-  back buffer to the unscaled shell image, so the next frame starts from what
-  the shell expects.
-
-Shell vs mission comes from the dinput proxy (`Mw4ShellMode`); the old
-black-border test is only a fallback.
-
-GameOS reads the cursor with `GetCursorPos`, normalizes it by the render
-size, and the shell hit-tests in render pixels. While shell frames are shown,
-`cursor.cpp` maps the visible position from the viewport into the 800x600
-shell space (`SetCursorPos` gets the inverse), so the drawn cursor and the hit
-areas match the scaled picture. Missions are not affected.
 
 ### Windowed checkbox
 
@@ -132,10 +129,11 @@ and size fields are never touched, and `props.mw4` is not modified. If an
 anchor is missing or the text would not fit, the script is left as shipped.
 
 The added lines create the checkbox and label, read the state in `GUI_INIT`,
-toggle it in `GUI_MAILBOX`, and keep it in step in `GUI_EXECUTE`. They talk to
-the hook through the game's own `ShellGetOptionValue`/`ShellSetOptionValue`
-with option id 200 (`kMwoWindowed`; the game's ids are 0-34). The hook answers
-that id before the game's handler sees it.
+toggle it in `GUI_MAILBOX`, and keep it in step in `GUI_EXECUTE` (so
+Alt+Enter updates the box). They talk to the hook through the game's own
+`ShellGetOptionValue`/`ShellSetOptionValue` with option id 200
+(`kMwoWindowed`; the game's ids are 0-34). The hook answers that id before the
+game's handler sees it.
 
 ### Patch sites (all located by unique byte patterns)
 
@@ -144,7 +142,6 @@ that id before the game's handler sees it.
 | `gos_SetScreenMode` | `0x0070F8B0` | 9-byte detour |
 | `Shell_CallbackHandler` | `0x00506770` | 6-byte detour |
 | `#VBD` member fetch | `0x00419150` | 7-byte detour |
-| `getresx`/`getresy` | `0x006D1448`, `0x006D145B`, `0x006D1482` | operand -> hook variable |
 | fullscreen 16-bit (renderer path) | `0x0070FECC` | `0x10` -> `0x20` |
 | fullscreen 16-bit (last resort) | `0x007100F0`, `0x007100FA` | `0x10` -> `0x20` |
 
@@ -157,13 +154,13 @@ resource-loader regions hashed by the multiplayer join handshake.
 
 ```ini
 [window]
-enabled=1     ; size, frame and center the main window in windowed mode
-relaunch=1    ; relaunch once if -window does not match the setting
+enabled=1     ; window layout (framed / borderless), Alt+Enter
+relaunch=1    ; relaunch once if -window is missing
 [display]
-enabled=1     ; frontend at selected resolution, live mode switch, 32-bit
+enabled=1     ; mission size, 32-bit, never exclusive fullscreen
 checkbox=1    ; add the Windowed checkbox to Options > Video
 [frontend]
-stretch=1     ; scale the 800x600 shell (4:3 kept)
+stretch=1     ; scale the picture into the window
 [log]
 enabled=1     ; mw4hook-<pid>.log and mw4hook-ddraw-<pid>.log
 ```
@@ -181,7 +178,7 @@ dump_image=1  ; write the unpacked image to mw4hook-image-<pid>.bin
 ```powershell
 pwsh ./src/hook/build.ps1        # artifacts/hook/dinput.dll, ddraw.dll, mw4hook.ini
 pwsh ./src/patcher/build.ps1     # artifacts/mw4patch.exe (embeds the above)
-pwsh ./tools/Reset-Mw4TestInstall.ps1 -Force
+pwsh ./tools/Reset-Mw4TestInstall.ps1 -Force   # 7-Zip, or Windows' tar.exe
 .\artifacts\mw4patch.exe install "MekTek\Mechwarrior Mercenaries - Mektek Mekpak" --yes
 ```
 
@@ -194,7 +191,7 @@ capturing the screen interferes with whoever is using the machine. With
 - a virtual cursor replaces `GetCursorPos`/`SetCursorPos`,
 - clicks/keys are posted as window messages (the game keeps mouse buttons in
   its key bitmap, filled by the window procedure) and injected into the
-  DirectInput state,
+  DirectInput state; `altenter` posts Alt+Enter,
 - the app-active flags are held on so input is processed while unfocused,
 - `shot` saves the presented frame (after scaling) from the ddraw proxy.
 
@@ -203,58 +200,31 @@ pwsh ./tools/Send-Mw4Automation.ps1 -Install $install -ShotDir out `
     -Command 'activate','smove 387 303','click','wait 3000','shot options.bmp'
 ```
 
-`smove` takes 800x600 shell coordinates. `setwindowed 0|1` calls the same
-backend as the checkbox. `tools/Invoke-Mw4Ui.ps1` reports the window size and
-style in physical pixels.
+`smove` takes coordinates in the scaled picture (800x600 in menus).
+`setwindowed 0|1` calls the same backend as the checkbox.
+`tools/Invoke-Mw4Ui.ps1` reports the window size and style in physical pixels.
 
-Limitation: in exclusive fullscreen without real focus, posted clicks are
-ignored by the game, so automated fullscreen -> windowed uses `setwindowed 1`.
-A real player in fullscreen has focus and uses the checkbox normally.
+## Evidence (fresh `MekTek.rar` extraction via tar.exe, patched with `mw4patch.exe`)
 
-## Evidence (fresh `MekTek.rar` extraction, patched with `mw4patch.exe`)
-
-- Raw `MW4Mercs.exe` launch relaunches with `-window`; 1024x768 client,
-  centered; all eight patterns found once.
-- Main menu, Options, Video tab: original layout at 1024x768, 1152x864 and
-  1280x720 (pillarboxed); drawn cursor on the hovered button.
-- Video tab shows Windowed checked; clicking it switches to fullscreen
-  (popup window, display mode 1280x720, box unchecked, `windowed=false`);
-  switching back restores the framed, centered window and checks the box.
-- `windowed=false` at launch: `-window` is stripped by the relaunch and the
-  game starts fullscreen with the scaled frontend.
-- Resolution dropdown 1024x768 -> 1152x864 resizes and re-centers the window
-  immediately; OK writes `screenwidth`/`screenheight`.
-- 5 windowed <-> fullscreen cycles from the Video tab: no crash, setting and
-  checkbox consistent.
-- Instant Action mission at 1280x720 windowed renders full-window; pause menu
-  centered; pause > Options overlay scaled; Close returns to the mission.
-- Uninstall removes the hook files and restores `options.ini`; the 32-file
-  core manifest verifies afterwards.
+- Intro movies fill the 1024x768 window, centered (were off-center/cropped).
+- Main menu and MechLab: original layout, MechLab mech centered in the bay
+  (was cut off), cursor on the hovered item.
+- `windowed=false` at launch: borderless 2560x1440 window, no display mode
+  change, menu pillarboxed 4:3, cursor on target.
+- Borderless: MechLab and an Instant Action mission stay borderless (was:
+  reverted to windowed). The 1024x768 mission is scaled to 1920x1440.
+- Alt+Enter in the mission: framed, centered 1024x768 window, mission 1:1,
+  `windowed=true` saved.
+- Exclusive fullscreen on this machine (stock and hooked): the 800x600 and
+  640x480 mode switches fail; GameOS re-initializes DirectDraw repeatedly and
+  falls back to a window or hangs. This is why exclusive fullscreen is no
+  longer used.
 
 ## Known limitations / not yet verified
 
-Play testing found further problems (fullscreen setting reverting on
-MechLab/mission, MechLab mech and FMV mispositioned, mission rendering
-artifacts, garbled audio). They are tracked in `docs/KNOWN-ISSUES.md`.
-
-1. **AntiHack and multiplayer** have not been tested with the detours.
-2. Only 5 toggle cycles were run (each one switches the monitor's mode); the
-   issue's 100-cycle acceptance test is still to do.
-3. Rapid double-clicks on the checkbox were not verified (the second click of
-   the automated attempt arrived after the switch to fullscreen, where the
-   harness cannot click).
-4. Selecting a Resolution entry after scrolling the dropdown picked index 0 in
-   the automated test. The same happens with all display hooks disabled, so it
-   is pre-existing listbox behavior (or an artifact of instant cursor jumps),
-   not caused by this hook.
-5. Sound: with sound enabled the test machine shows the pre-existing
-   DirectSound `CreateSoundBuffer` (DSERR_BUFFERLOST) error, so tests use
-   `-nosound`. (A malformed `OM_Video.script` shows up as a "Nested
-   exception ... 0x00000094" fatal error when Options opens; the shipped
-   rewrite does not.)
-6. The frontend scaler is a GDI stretch of the 800x600 shell; text is softer
-   than a native high-resolution UI would be.
-7. Renderer 3 (software) is now asked for 32-bit; it was not tested.
+See `docs/KNOWN-ISSUES.md` for the full list. In short: mission rendering
+artifacts and garbled audio are pre-existing or unconfirmed; AntiHack and
+multiplayer are untested; the 100-cycle toggle test is still to do.
 
 ## Reversibility
 

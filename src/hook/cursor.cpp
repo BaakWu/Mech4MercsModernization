@@ -1,12 +1,12 @@
-// Cursor mapping for the scaled frontend.
+// Cursor mapping for the scaled picture.
 //
 // GameOS reads the cursor with GetCursorPos, subtracts the client origin and
-// normalizes by the render size; the shell then hit-tests (and draws its
-// cursor) in render pixels. The shell is laid out in the top-left 800x600 of
-// the render surface, and the ddraw proxy scales that area into a 4:3
-// viewport of the window. So while frontend frames are shown, the visible
-// position is mapped from the viewport into the 800x600 shell space here;
-// SetCursorPos gets the inverse. In missions the cursor is untouched.
+// normalizes by its render size; the shell then hit-tests (and draws its
+// cursor) in render pixels. When the ddraw proxy scales the picture into the
+// window (the 800x600 menus in a larger window, or a mission in the
+// borderless fullscreen window), the visible position is mapped from the
+// scaled viewport into the picture's own pixels here; SetCursorPos gets the
+// inverse. When the picture is not scaled the cursor is untouched.
 #include "hook.h"
 
 namespace mw4hook {
@@ -52,17 +52,15 @@ bool ClientOrigin(POINT* origin) {
     return true;
 }
 
-constexpr int kShellWidth = 800;
-constexpr int kShellHeight = 600;
-
-// True while the frontend is shown scaled (the viewport is in client pixels).
-bool FrontendView(RECT* view) {
+// True while the picture is shown scaled: |view| is where (client pixels),
+// |size| the picture's own size (render pixels).
+bool ScaledView(RECT* view, SIZE* size) {
     FrontendViewport_t viewport = ResolveViewport();
-    SIZE client{};
-    if (ShellMode() == 0 || !viewport || !viewport(view, &client)) {
+    if (!viewport || !viewport(view, size)) {
         return false;
     }
-    return view->right > view->left && view->bottom > view->top;
+    return view->right > view->left && view->bottom > view->top && size->cx > 0 &&
+           size->cy > 0;
 }
 
 LONG Clamp(LONG v, LONG lo, LONG hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -86,11 +84,12 @@ BOOL WINAPI Hook_GetCursorPos(LPPOINT point) {
         client_pos = {point->x - origin.x, point->y - origin.y};
     }
     RECT view{};
-    if (FrontendView(&view)) {
+    SIZE size{};
+    if (ScaledView(&view, &size)) {
         client_pos.x = MulDiv(Clamp(client_pos.x, view.left, view.right - 1) - view.left,
-                              kShellWidth, view.right - view.left);
+                              size.cx, view.right - view.left);
         client_pos.y = MulDiv(Clamp(client_pos.y, view.top, view.bottom - 1) - view.top,
-                              kShellHeight, view.bottom - view.top);
+                              size.cy, view.bottom - view.top);
     }
     point->x = origin.x + client_pos.x;
     point->y = origin.y + client_pos.y;
@@ -104,9 +103,10 @@ BOOL WINAPI Hook_SetCursorPos(int x, int y) {
     }
     POINT client_pos = {x - origin.x, y - origin.y};
     RECT view{};
-    if (FrontendView(&view)) {
-        client_pos.x = view.left + MulDiv(client_pos.x, view.right - view.left, kShellWidth);
-        client_pos.y = view.top + MulDiv(client_pos.y, view.bottom - view.top, kShellHeight);
+    SIZE size{};
+    if (ScaledView(&view, &size)) {
+        client_pos.x = view.left + MulDiv(client_pos.x, view.right - view.left, size.cx);
+        client_pos.y = view.top + MulDiv(client_pos.y, view.bottom - view.top, size.cy);
     }
     if (AutomationSetCursor(client_pos)) {
         return TRUE;
@@ -116,14 +116,15 @@ BOOL WINAPI Hook_SetCursorPos(int x, int y) {
 
 }  // namespace
 
-// Visible client position of a point in the 800x600 shell (tests).
+// Visible client position of a point in the scaled picture (tests).
 bool ShellToClient(int x, int y, POINT* client_pos) {
     RECT view{};
-    if (!FrontendView(&view)) {
+    SIZE size{};
+    if (!ScaledView(&view, &size)) {
         return false;
     }
-    client_pos->x = view.left + MulDiv(x, view.right - view.left, kShellWidth);
-    client_pos->y = view.top + MulDiv(y, view.bottom - view.top, kShellHeight);
+    client_pos->x = view.left + MulDiv(x, view.right - view.left, size.cx);
+    client_pos->y = view.top + MulDiv(y, view.bottom - view.top, size.cy);
     return true;
 }
 

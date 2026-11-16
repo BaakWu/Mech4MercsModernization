@@ -7,12 +7,24 @@
 // windowed or the fullscreen setup routine. Argument 8 requests fullscreen and
 // argument 10 requests windowed. The game never sets either flag itself.
 //
+// The game always runs on GameOS' windowed path. The Windowed setting only
+// decides the window (window.cpp): a framed window at the selected
+// resolution, or a borderless window over the whole monitor ("fullscreen"
+// without changing the display mode). Exclusive fullscreen is never used: on
+// current Windows/drivers its 800x600/640x480 mode switches fail and GameOS
+// falls back to a window anyway.
+//
 // The hook wraps gos_SetScreenMode and:
-//   - replaces every requested size with the selected resolution, so the
-//     2002 shell (which always asks for 800x600) runs at the same size as the
-//     mission and the frontend scaler fills the window,
+//   - leaves the shell's 800x600 requests alone, so the frontend, MechLab and
+//     movies render exactly as designed (the ddraw proxy scales the picture
+//     into the window),
+//   - replaces mission requests with the selected resolution (3.1c's own
+//     index-to-size map disagrees with its dropdown for some entries),
 //   - raises 16-bit requests to 32-bit,
-//   - sets the fullscreen/windowed request flags from the Windowed setting.
+//   - never requests exclusive fullscreen.
+//
+// Only the player changes the Windowed setting (checkbox, or Alt+Enter, which
+// window.cpp routes here).
 //
 // The Shell_CallbackHandler is wrapped to answer a new option id
 // (kMwoWindowed) for ShellGetOptionValue/ShellSetOptionValue, to apply a
@@ -62,12 +74,6 @@ int g_sel_height = 768;
 // in-mission options overlay); anything else is the mission.
 DWORD g_req_width = 800;
 DWORD g_req_height = 600;
-
-// What the script builtins getresx()/getresy() report. The shell scripts lay
-// themselves out with these (centered dialogs, help text, loading screens),
-// so they must stay 800x600 while the shell renders at a larger size.
-volatile DWORD g_script_resx = 800;
-volatile DWORD g_script_resy = 600;
 wchar_t g_options_path[MAX_PATH] = {};
 bool g_installed = false;
 
@@ -132,23 +138,18 @@ void __stdcall Hook_SetScreenMode(DWORD width, DWORD height, DWORD bpp, DWORD de
     g_req_height = req_h;
     SyncGameSelectedSize();
     const bool shell = req_w == 800 && req_h == 600;
-    width = static_cast<DWORD>(g_sel_width);
-    height = static_cast<DWORD>(g_sel_height);
-    if (shell && (width < 800 || height < 600)) {
-        // The shell is laid out for 800x600; never render it smaller (it
-        // would be cropped). Smaller modes apply to missions only, as in the
-        // original game.
-        width = 800;
-        height = 600;
+    if (!shell) {
+        width = static_cast<DWORD>(g_sel_width);
+        height = static_cast<DWORD>(g_sel_height);
     }
-    g_script_resx = shell ? 800 : width;
-    g_script_resy = shell ? 600 : height;
     if (bpp == 16) {
         bpp = 32;
     }
+    // Never GameOS' exclusive fullscreen: Windowed off is a borderless window
+    // (window.cpp). If GameOS is somehow in exclusive mode, bring it back.
     const bool fullscreen_now = g_fullscreen && *g_fullscreen != 0;
-    goto_full = (!g_windowed && !fullscreen_now) ? 1 : 0;
-    goto_window = (g_windowed && fullscreen_now) ? 1 : 0;
+    goto_full = 0;
+    goto_window = fullscreen_now ? 1 : 0;
     Log("gos_SetScreenMode %lux%lu -> %lux%lux%lu %s%s%s\n", req_w, req_h, width,
         height, bpp, fullscreen_now ? "[fullscreen]" : "[windowed]",
         goto_full ? " goto-fullscreen" : "", goto_window ? " goto-windowed" : "");
@@ -210,7 +211,8 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
                     g_sel_width = w;
                     g_sel_height = h;
                     Log("display: resolution -> %dx%d (index %d)\n", w, h, index);
-                    ApplyDisplay();
+                    ApplyWindowLayout();  // the window size, now
+                    ApplyDisplay();       // the mission size, if in a mission
                 }
             }
             return result;
@@ -224,40 +226,6 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
         PersistWindowed();
     }
     return result;
-}
-
-// Point the getresx()/getresy() builtins (expression evaluator cases) at the
-// hook's script-size variables instead of the render size.
-void PatchScriptResolution(const DWORD* width_global, const DWORD* height_global) {
-    unsigned char* p = FindUnique(
-        "script_getres",
-        "80 38 2F 75 22 80 78 01 32 75 1C 83 C0 02 5F A3 ?? ?? ?? ?? A1 ?? ?? ?? ?? 5E 5D D1 E8");
-    if (!p) {
-        return;
-    }
-    struct Site {
-        size_t offset;
-        const DWORD* expected;
-        volatile DWORD* replacement;
-    };
-    const Site sites[] = {
-        {0x15, width_global, &g_script_resx},   // getresx() / 2
-        {0x28, width_global, &g_script_resx},   // getresx()
-        {0x4F, height_global, &g_script_resy},  // getresy()
-    };
-    for (const Site& site : sites) {
-        if (p[site.offset - 1] != 0xA1 ||
-            *reinterpret_cast<DWORD*>(p + site.offset) !=
-                reinterpret_cast<DWORD>(site.expected)) {
-            Log("display: getres site +0x%zX unexpected; not patched\n", site.offset);
-            return;
-        }
-    }
-    for (const Site& site : sites) {
-        DWORD address = reinterpret_cast<DWORD>(site.replacement);
-        WriteCode(p + site.offset, &address, 4);
-    }
-    Log("display: getresx/getresy report the shell layout size\n");
 }
 
 void Patch16BitFallbacks() {
@@ -318,28 +286,15 @@ void SelectedSize(int* width, int* height) {
 
 bool GameFullscreen() { return g_fullscreen && *g_fullscreen != 0; }
 
-// GameOS can change the mode on its own: Alt+Enter sets its go-windowed or
-// go-fullscreen flag directly, and a fullscreen setup that fails falls back
-// to the windowed path. The window hooks report the mode actually applied so
-// the checkbox and options.ini stay truthful.
-void NoteAppliedMode(bool windowed) {
-    if (windowed == g_windowed) {
-        return;
-    }
-    g_windowed = windowed;
-    Log("display: game switched to %s on its own; setting updated\n",
-        windowed ? "windowed" : "fullscreen");
-    PersistWindowed();
-}
-
 void SetWindowedMode(bool windowed) {
     if (windowed == g_windowed) {
         return;
     }
     g_windowed = windowed;
-    Log("display: windowed -> %d\n", windowed ? 1 : 0);
+    Log("display: windowed -> %d (%s)\n", windowed ? 1 : 0,
+        windowed ? "framed window" : "borderless fullscreen");
     PersistWindowed();
-    ApplyDisplay();
+    ApplyWindowLayout();
 }
 
 // Installs the display hooks once the unpacked code is present. Returns true
@@ -401,8 +356,6 @@ bool InstallDisplayHooks() {
 
     SyncGameSelectedSize();
     Patch16BitFallbacks();
-    PatchScriptResolution(reinterpret_cast<DWORD*>(addr(ssm + 5)),
-                          reinterpret_cast<DWORD*>(addr(ssm + 0x27)));
 
     InstallDetour(ssm, 9, reinterpret_cast<void*>(&Hook_SetScreenMode),
                   reinterpret_cast<void**>(&g_set_screen_mode));
