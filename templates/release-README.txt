@@ -32,7 +32,8 @@ Then:
 - In Options > Controls, press DEFAULT once to load the MW5-style keys:
   X full stop, P power, N night vision, B map, R/T/Shift+T/Q targeting,
   1-6 fire groups, numpad throttle presets (Numpad 0 = 100%), arrow keys
-  for torso pitch/twist, Backspace chain fire, F flush coolant. Press OK.
+  for torso pitch/twist, Backspace chain fire, F flush coolant. It also
+  turns the mouse on and makes it aim the torso. Press OK.
 To go back: set mw5=0 and press DEFAULT again (this gives MW4's original
 layout, which uses = and - for the throttle and the arrow keys to turn).
 

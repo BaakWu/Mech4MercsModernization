@@ -184,7 +184,17 @@ void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWOR
         callback(a1, a2, args);
         ++applied;
     }
-    Log("controls: MW5 key layout applied (%d bindings)\n", applied);
+    // Mouse aims the torso, as in MW5: enable the mouse (SetMouse 213, 1 = on)
+    // and put its X axis on the torso (SetMouseXAxis 225; the Controls
+    // screen's Mouse X Axis list: 0 None, 1 Turning, 2 Torso). Arguments are
+    // pointers.
+    int on = 1;
+    int torso = 2;
+    int mouse_args[2] = {213, reinterpret_cast<int>(&on)};
+    callback(a1, a2, mouse_args);
+    int axis_args[2] = {225, reinterpret_cast<int>(&torso)};
+    callback(a1, a2, axis_args);
+    Log("controls: MW5 key layout applied (%d bindings, mouse on, mouse X = torso)\n", applied);
 }
 
 // Returns true when done (installed or not applicable) so the caller stops

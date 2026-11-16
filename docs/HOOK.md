@@ -205,6 +205,10 @@ J jump jets); MekTek pilot profiles ship with their own WASD layout.
 | Battle grid (radar/map) | B | | Next nav point | Shift+N |
 | Toggle zoom window | Z | | Toggle radar range | Shift+R |
 
+The same step turns the mouse on and puts the Mouse X Axis on the torso, as
+in MW5 (`SetMouse` 213 = 1, `SetMouseXAxis` 225 = 2; that list is 0 None,
+1 Turning, 2 Torso). MW4's factory default leaves the mouse X axis on None.
+
 Everything else keeps MW4's factory key (Center Legs To Torso Shift+Space,
 chat Y/U, lance orders F1–F10, group toggles Shift+1–6, `[`/`]`, V view).
 The Controls list names keys by scan code, so the arrow keys are shown as
