@@ -1,54 +1,38 @@
-# mw4patch.exe (local build)
+# dist (local build output)
 
-This folder contains the locally built development patcher:
+Build output lands here. Nothing in this folder except this README is
+committed to Git.
+
+## Release zip
+
+```text
+dist\MW4Mercs-WindowedPatch-<date>-<commit>.zip
+```
+
+The public release. Build it with:
+
+```powershell
+pwsh ./tools/New-Mw4Release.ps1                 # rebuilds the hook, then zips
+pwsh ./tools/New-Mw4Release.ps1 -Version 1.0.0  # explicit version name
+```
+
+It contains `dinput.dll`, `ddraw.dll`, `mw4hook.ini` and
+`WindowedPatch-README.txt` (player instructions and file checksums). Players
+copy the three files next to `MW4Mercs.exe`; uninstall is deleting them. The
+build refuses a file name that the 3.1c game folder already uses.
+
+## Development installer
 
 ```text
 dist\mw4patch.exe
 ```
 
-It is **not committed to Git** (binary build output). Rebuild it with:
-
-```powershell
-pwsh ./src/patcher/build.ps1
-```
-
-## Use
-
-From the repository root:
+A test tool, not the release (`docs/PATCHER.md`). Rebuild it with
+`pwsh ./src/patcher/build.ps1`.
 
 ```powershell
 $install = "C:\repos\Mech4MercsModernization\MekTek\Mechwarrior Mercenaries - Mektek Mekpak"
-
-# Verify the install first
 .\dist\mw4patch.exe verify $install
-
-# Apply the patch
 .\dist\mw4patch.exe install $install --yes
-
-# Inspect what was installed
-.\dist\mw4patch.exe info $install
-
-# Remove it again
 .\dist\mw4patch.exe uninstall $install --yes
 ```
-
-The patcher installs a windowed shortcut in the game directory:
-
-```text
-MechWarrior 4 Mercenaries (Windowed).lnk
-```
-
-It also updates the existing `Shortcut to MW4Mercs.exe.lnk` to use `-window`
-(backing it up first). Starting the raw `MW4Mercs.exe` also works: the proxy
-relaunches it with `-window` before the game initializes.
-
-## Notes
-
-- The patcher verifies `MW4Mercs.exe` and all 32 core files before changing
-  anything.
-- It backs up `options.ini`, conflicting `dinput.dll` / `mw4hook.ini` files, and
-  the existing shortcut.
-- The game executable is not modified.
-- This is a development build. The original frontend still renders at 800x600
-  inside the 1024x768 window.
-- See `docs/PATCHER.md` for details and limitations.

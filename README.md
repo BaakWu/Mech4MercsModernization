@@ -7,9 +7,8 @@ The goal is to make the original game launch and play correctly on modern
 Windows without replacing the engine, breaking AntiHack, or shipping game
 files.
 
-> **Status: pre-release.** There is no public patch download yet. The current
-> repository contains the verified baseline, hash manifests, configuration
-> repair tools, and the technical plan for the first patch.
+> **Status: pre-release.** The windowed-mode patch is feature complete and
+> builds as a zip (see Installing); there is no public download yet.
 
 ## Why this exists
 
@@ -48,21 +47,28 @@ The only display change in the first release is compatibility-oriented:
 windowed or borderless play at the chosen resolution, with the original 4:3
 picture scaled to fit. That is not a visual overhaul.
 
-## Planned user experience
+## Installing
 
-The release will be a single **`mw4patch.exe`**:
+The release is a zip, `MW4Mercs-WindowedPatch-<version>.zip`:
 
-1. Verify the supported game build by hash.
-2. Back up configuration and any files it changes.
-3. Write a known-good display configuration.
-4. Install an optional runtime fix layer next to the game executable.
-5. Create a windowed launch shortcut.
-6. Record exactly what was installed.
-7. Provide an uninstall/rollback path.
+1. Copy `dinput.dll`, `ddraw.dll` and `mw4hook.ini` into the game folder (the
+   one with `MW4Mercs.exe`).
+2. Start the game as usual. It opens in a window; set the size and the
+   Windowed option in Options > Video.
+
+To uninstall, delete those three files (and any `mw4hook-*.log`). The zip's
+`WindowedPatch-README.txt` says the same for players.
 
 The fix layer is loaded at runtime rather than rewriting `MW4Mercs.exe`. That
 keeps the patch reversible and avoids touching the game’s AntiHack or the code
-regions used by the multiplayer integrity check.
+regions used by the multiplayer integrity check. No game file is changed: with
+the files removed, the folder matches the original 3.1c manifest again.
+
+Build the zip with:
+
+```powershell
+pwsh ./tools/New-Mw4Release.ps1     # dist\MW4Mercs-WindowedPatch-<date>-<commit>.zip
+```
 
 ## Supported game
 
@@ -135,11 +141,11 @@ proxy. Together they:
 Build, test and technical details are in `docs/HOOK.md`; open problems are in
 `docs/KNOWN-ISSUES.md`.
 
-### Development patcher
+### Development installer (not the release)
 
-`src/patcher/` builds a single self-contained `mw4patch.exe`. It embeds the
-hook DLL, verifies the supported 3.1c build against the core manifest, backs up
-`options.ini`, patches the display settings, installs the hook, creates a
+`src/patcher/` builds `mw4patch.exe`, a development installer used for
+testing. It embeds the hook files, verifies the supported 3.1c build against
+the core manifest, backs up `options.ini`, installs the hook, creates a
 windowed shortcut, and writes an install record with uninstall support.
 
 ```powershell
@@ -199,7 +205,8 @@ This is a gameplay/input change and is not part of the first release.
 | `docs/ROADMAP.md` | Milestones and non-goals |
 | `manifests/` | Core and full SHA-256 baselines |
 | `src/hook/` | Native `dinput.dll` proxy and Win32/display hooks |
-| `src/patcher/` | Single-executable patcher with embedded hook payload |
+| `src/patcher/` | Development installer (`mw4patch.exe`); the release is a zip |
+| `templates/release-README.txt` | Player instructions packed into the release zip |
 | `templates/` | Known-good configuration template |
 | `tools/` | Inspect, verify, repair, window-test, and manifest scripts |
 
@@ -238,10 +245,10 @@ file hash, original bytes or pattern, and observed behavior.
 See `docs/ROADMAP.md` for the milestone plan. The short version:
 
 1. Verify the baseline and fix configuration. **Done.**
-2. Build the `mw4patch.exe` scaffold and release pipeline.
-3. Implement windowed mode and the Windowed checkbox. **Done.**
-4. Add optional WASD throttle-decay controls.
-5. Ship a single reversible patch executable.
+2. Implement windowed mode and the Windowed checkbox. **Done.**
+3. Release zip build (`tools/New-Mw4Release.ps1`). **Done.**
+4. Publish the first release.
+5. Add optional WASD throttle-decay controls.
 
 ## Legal
 

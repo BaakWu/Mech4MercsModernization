@@ -1,7 +1,9 @@
 # mw4patch.exe (development patcher)
 
-Status: **development**. This is the first single-executable patcher for
-testing the windowed 1024x768 fix. It is not a signed public release.
+Status: **development tool, not the release.** The public release is a zip
+built by `tools/New-Mw4Release.ps1` (players copy the files into the game
+folder and delete them to uninstall). `mw4patch.exe` stays useful for testing:
+it verifies the install by hash and keeps an install record.
 
 ## What it does
 

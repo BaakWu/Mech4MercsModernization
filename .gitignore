@@ -27,4 +27,5 @@
 
 # Published local build (the README is tracked; binaries are not).
 /dist/*.exe
+/dist/*.zip
 /dist/*.pdb

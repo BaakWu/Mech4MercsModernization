@@ -10,17 +10,21 @@ Build a small, auditable Windows patch for **MechWarrior 4: Mercenaries** that
 makes the existing 3.1c game behave correctly on modern systems.
 
 This is **not** an engine rewrite, a source port, or a competitor to MekTek
-Rebirth. The product is a patch executable that:
+Rebirth. The product is a runtime patch that:
 
-- verifies the supported game build
 - fixes modern-Windows display and input defects
 - keeps MekTek AntiHack intact
-- is reversible and hash-checked
-- does not redistribute game files
+- is reversible: removing its files restores the stock game
+- changes no game file on disk and does not redistribute game files
+- only acts on the supported build (every patch site is found by a unique
+  byte pattern; anything else leaves the game untouched)
 
-The primary release artifact will be a self-contained **`.exe` patcher**
-(`mw4patch.exe`). It may embed and install a native runtime hook DLL, but the
-user-facing release stays a single executable.
+The release artifact is a **zip** (`MW4Mercs-WindowedPatch-<version>.zip`,
+built by `tools/New-Mw4Release.ps1`): `dinput.dll`, `ddraw.dll`, `mw4hook.ini`
+and `WindowedPatch-README.txt`, copied next to `MW4Mercs.exe`. Uninstall is
+deleting those files. `mw4patch.exe` (`src/patcher/`) remains a development
+installer with hash verification and an install record; it is not the
+release. (Changed 2026-11-16 from a single-`.exe` release.)
 
 ## 2. Supported baseline
 
@@ -247,19 +251,18 @@ AntiHack.
 
 ## 5. Recommended technical direction
 
-Start with a **patcher + runtime hook** architecture:
+A **runtime hook** shipped as a zip:
 
 ```text
-mw4patch.exe                  user-facing installer/patcher
-  - verifies game hashes
-  - backs up options.ini
-  - writes known-good config
-  - installs dinput.dll proxy / mw4hook.dll
-  - creates a windowed shortcut with -window
-  - records installed files and hashes
-  - supports uninstall/rollback
+release zip                   copied into the game folder
+  - dinput.dll, ddraw.dll       runtime proxies (below)
+  - mw4hook.ini                 per-fix switches, logging
+  - WindowedPatch-README.txt    install/uninstall instructions
+  - no file may share a name with a game file (the build checks)
 
-dinput.dll / mw4hook.dll        native runtime hook
+mw4patch.exe (development)    installer with hash checks and install record
+
+dinput.dll / ddraw.dll          native runtime hook
   - loaded by MW4Mercs.exe
   - pattern-scans the 3.1c binary
   - hooks display/window, mouse input, menu dispatch, imagehlp
@@ -290,7 +293,8 @@ dinput.dll / mw4hook.dll        native runtime hook
 | `manifests/` | Core and full hash manifests |
 | `templates/options.ini` | Known-good configuration template |
 | `src/hook/` | Native dinput proxy and window/resolution hooks |
-| `src/patcher/` | Single-executable patcher with embedded hook payload |
+| `src/patcher/` | Development installer (`mw4patch.exe`); the release is a zip |
+| `tools/New-Mw4Release.ps1` | Builds the release zip (hook files + player README) |
 | `tools/Get-Mw4InstallInfo.ps1` | Identify a build and validate options.ini |
 | `tools/Test-Mw4Manifest.ps1` | Verify files against a manifest |
 | `tools/Repair-Mw4Config.ps1` | Write a safe options.ini with backup |
@@ -347,8 +351,9 @@ High-value files:
    a multiplayer test plan.
 8. **Patch data must be reversible.** Back up every changed file and write an
    install record.
-9. **Keep the release a single `.exe`.** Native payloads may be embedded as
-   resources and extracted into the game directory.
+9. **The release is a zip** built by `tools/New-Mw4Release.ps1`: the hook
+   files plus `WindowedPatch-README.txt`, nothing else, and no file named like
+   a game file (the game folder has its own `README.txt`).
 10. **Document every binary change** with:
     - target file name and SHA-256
     - version
@@ -509,12 +514,11 @@ High-value files:
 
 ## 10. Definition of done for the first release
 
-- A user with a verified 3.1c install can run one `.exe`.
-- The patcher verifies the game, backs up files, installs the fix layer, and
-  reports exactly what changed.
-- The game launches in a 1024x768 window.
+- A user with a 3.1c install extracts one zip into the game folder.
+- The game launches windowed; Options > Video has the Windowed checkbox.
 - The in-game options menu can change resolution.
 - The listed first-release fixes are present or explicitly scoped out.
 - AntiHack remains active.
-- Uninstall restores the original config and removes the hook files.
+- Uninstall is deleting the zip's files; the game folder then matches the full
+  manifest again.
 - No game files are redistributed.
