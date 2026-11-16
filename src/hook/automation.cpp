@@ -1,0 +1,287 @@
+// Test automation (development only, [debug] automation=1).
+//
+// Drives the game from inside the process so tests do not need the real
+// cursor, keyboard focus, or a screen capture of the desktop:
+//
+// - cursor.cpp reads a virtual cursor from here instead of GetCursorPos,
+// - DirectInput mouse/keyboard GetDeviceState results get injected buttons
+//   and keys,
+// - commands are read from mw4hook-cmd.txt in the game directory.
+//
+// Commands (one per line):
+//   move  <x> <y>       client coordinates (physical pixels)
+//   smove <x> <y>       800x600 shell coordinates, scaled to the client
+//   click               left button down for ~150 ms, then up
+//   key   <vk>          press a virtual key (decimal or 0x hex)
+//   activate            post WM_ACTIVATEAPP/WM_ACTIVATE to the game window
+//   setwindowed <0|1>   call the Windowed backend directly (diagnostics)
+//   wait  <ms>
+//   shot  <file.bmp>    ask the ddraw proxy to save the next presented frame
+//   log   <text>
+//
+// Nothing here is active unless automation is enabled in mw4hook.ini.
+#include "hook.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace mw4hook {
+namespace {
+
+CRITICAL_SECTION g_lock;
+bool g_active = false;          // a command has been received
+POINT g_cursor = {0, 0};        // virtual cursor, client coordinates
+volatile LONG g_button_until = 0;
+volatile LONG g_key_until = 0;
+volatile LONG g_key_code = 0;
+
+std::wstring GameDirFile(const wchar_t* name) {
+    wchar_t path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    wchar_t* slash = len ? wcsrchr(path, L'\\') : nullptr;
+    if (!slash) {
+        return L"";
+    }
+    slash[1] = L'\0';
+    return std::wstring(path) + name;
+}
+
+bool ClientOrigin(POINT* origin, SIZE* size) {
+    HWND hwnd = MainWindow();
+    if (!hwnd) {
+        return false;
+    }
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    POINT p = {0, 0};
+    ClientToScreen(hwnd, &p);
+    *origin = p;
+    size->cx = client.right;
+    size->cy = client.bottom;
+    return true;
+}
+
+bool Due(volatile LONG* until) {
+    LONG value = *until;
+    return value != 0 && static_cast<LONG>(GetTickCount() - value) < 0;
+}
+
+void KeepAppActive();
+
+void Execute(const std::string& line) {
+    char verb[16] = {};
+    char rest[MAX_PATH] = {};
+    if (sscanf_s(line.c_str(), "%15s %259[^\r\n]", verb,
+                 static_cast<unsigned>(sizeof(verb)), rest,
+                 static_cast<unsigned>(sizeof(rest))) < 1) {
+        return;
+    }
+    g_active = true;
+    KeepAppActive();
+    Log("auto: %s %s\n", verb, rest);
+    if (_stricmp(verb, "move") == 0 || _stricmp(verb, "smove") == 0) {
+        int x = 0;
+        int y = 0;
+        sscanf_s(rest, "%d %d", &x, &y);
+        if (_stricmp(verb, "smove") == 0) {
+            POINT mapped{};
+            POINT origin{};
+            SIZE size{};
+            if (ShellToClient(x, y, &mapped)) {
+                x = mapped.x;
+                y = mapped.y;
+            } else if (ClientOrigin(&origin, &size)) {
+                x = MulDiv(x, size.cx, 800);
+                y = MulDiv(y, size.cy, 600);
+            }
+        }
+        EnterCriticalSection(&g_lock);
+        g_cursor.x = x;
+        g_cursor.y = y;
+        LeaveCriticalSection(&g_lock);
+    } else if (_stricmp(verb, "click") == 0) {
+        // The game keeps mouse buttons in its key bitmap (VK_LBUTTON), filled
+        // by the window procedure; DirectInput is only used for motion.
+        HWND hwnd = MainWindow();
+        EnterCriticalSection(&g_lock);
+        LPARAM where = MAKELPARAM(g_cursor.x, g_cursor.y);
+        LeaveCriticalSection(&g_lock);
+        InterlockedExchange(&g_button_until, static_cast<LONG>(GetTickCount() + 150));
+        if (hwnd) {
+            PostMessageA(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, where);
+        }
+        Sleep(150);
+        if (hwnd) {
+            PostMessageA(hwnd, WM_LBUTTONUP, 0, where);
+        }
+        Sleep(150);
+    } else if (_stricmp(verb, "key") == 0) {
+        // Virtual-key code; posted as window messages and injected into the
+        // DirectInput keyboard state (scan code) for code paths that poll it.
+        const UINT vk = static_cast<UINT>(strtol(rest, nullptr, 0));
+        const UINT scan = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+        HWND hwnd = MainWindow();
+        InterlockedExchange(&g_key_code, static_cast<LONG>(scan));
+        InterlockedExchange(&g_key_until, static_cast<LONG>(GetTickCount() + 150));
+        if (hwnd) {
+            PostMessageA(hwnd, WM_KEYDOWN, vk, 1 | (scan << 16));
+        }
+        Sleep(150);
+        if (hwnd) {
+            PostMessageA(hwnd, WM_KEYUP, vk, 1 | (scan << 16) | 0xC0000000);
+        }
+        Sleep(150);
+    } else if (_stricmp(verb, "activate") == 0) {
+        // Tell GameOS it is the active app (exclusive fullscreen ignores
+        // input otherwise). Test-only; the real window does not get focus.
+        HWND hwnd = MainWindow();
+        if (hwnd) {
+            PostMessageA(hwnd, WM_ACTIVATEAPP, TRUE, 0);
+            PostMessageA(hwnd, WM_ACTIVATE, WA_ACTIVE, 0);
+        }
+        Sleep(300);
+    } else if (_stricmp(verb, "setwindowed") == 0) {
+        // Calls the same backend as the Video checkbox (diagnostics only).
+        SetWindowedMode(atoi(rest) != 0);
+    } else if (_stricmp(verb, "wait") == 0) {
+        Sleep(static_cast<DWORD>(atoi(rest)));
+    } else if (_stricmp(verb, "shot") == 0) {
+        std::wstring req = GameDirFile(L"mw4hook-shot.req");
+        HANDLE file = CreateFileW(req.c_str(), GENERIC_WRITE, 0, nullptr,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteFile(file, rest, static_cast<DWORD>(strlen(rest)), &written, nullptr);
+            CloseHandle(file);
+        }
+        // Wait for the ddraw proxy to take the frame.
+        for (int i = 0; i < 40 && GetFileAttributesW(req.c_str()) != INVALID_FILE_ATTRIBUTES; ++i) {
+            Sleep(50);
+        }
+    }
+}
+
+// GameOS skips its mouse update while the app is inactive (window not in the
+// foreground). While automation is driving, keep both activity flags set.
+void KeepAppActive() {
+    static volatile BYTE* flags[2] = {};
+    static bool searched = false;
+    if (!searched) {
+        searched = true;
+        unsigned char* p = FindUnique(
+            "mouse_active",
+            "A0 ?? ?? ?? ?? 83 EC 1C 84 C0 53 55 56 0F 84 ?? ?? ?? ?? A0 ?? ?? ?? ?? 84 C0 0F 84");
+        if (p) {
+            flags[0] = reinterpret_cast<BYTE*>(*reinterpret_cast<DWORD*>(p + 1));
+            flags[1] = reinterpret_cast<BYTE*>(*reinterpret_cast<DWORD*>(p + 0x14));
+        }
+    }
+    for (volatile BYTE* flag : flags) {
+        if (flag) {
+            *flag = 1;
+        }
+    }
+}
+
+DWORD WINAPI AutomationThread(LPVOID) {
+    const std::wstring cmd = GameDirFile(L"mw4hook-cmd.txt");
+    const std::wstring busy = GameDirFile(L"mw4hook-cmd.busy");
+    for (;;) {
+        Sleep(50);
+        if (g_active) {
+            KeepAppActive();
+        }
+        // Rename first so a writer can never race with the reader.
+        if (!MoveFileExW(cmd.c_str(), busy.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            continue;
+        }
+        std::string text;
+        HANDLE file = CreateFileW(busy.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            char buffer[4096];
+            DWORD read = 0;
+            while (ReadFile(file, buffer, sizeof(buffer), &read, nullptr) && read) {
+                text.append(buffer, read);
+            }
+            CloseHandle(file);
+        }
+        DeleteFileW(busy.c_str());
+        size_t start = 0;
+        while (start < text.size()) {
+            size_t end = text.find('\n', start);
+            if (end == std::string::npos) {
+                end = text.size();
+            }
+            Execute(text.substr(start, end - start));
+            start = end + 1;
+        }
+        Log("auto: batch done\n");
+    }
+}
+
+}  // namespace
+
+void AutomationInit() {
+    if (!GetConfig().debug_automation) {
+        return;
+    }
+    InitializeCriticalSection(&g_lock);
+    HANDLE thread = CreateThread(nullptr, 0, AutomationThread, nullptr, 0, nullptr);
+    if (thread) {
+        CloseHandle(thread);
+    }
+    Log("auto: automation enabled\n");
+}
+
+bool AutomationCursor(POINT* client_pos) {
+    if (!g_active) {
+        return false;
+    }
+    EnterCriticalSection(&g_lock);
+    *client_pos = g_cursor;
+    LeaveCriticalSection(&g_lock);
+    return true;
+}
+
+bool AutomationSetCursor(POINT client_pos) {
+    if (!g_active) {
+        return false;
+    }
+    EnterCriticalSection(&g_lock);
+    g_cursor = client_pos;
+    LeaveCriticalSection(&g_lock);
+    return true;
+}
+
+// Called by the DirectInput device wrapper after the real GetDeviceState.
+void AutomationFilterDeviceState(DWORD size, void* data, HRESULT* result) {
+    if (!g_active || !data) {
+        return;
+    }
+    if (size == 16 || size == 20) {  // DIMOUSESTATE / DIMOUSESTATE2
+        if (FAILED(*result)) {
+            memset(data, 0, size);
+            *result = S_OK;
+        }
+        auto* buttons = static_cast<unsigned char*>(data) + 12;
+        buttons[0] = Due(&g_button_until) ? 0x80 : 0x00;
+        // The virtual cursor is absolute; suppress real relative motion.
+        static_cast<LONG*>(data)[0] = 0;
+        static_cast<LONG*>(data)[1] = 0;
+    } else if (size == 256) {
+        if (FAILED(*result)) {
+            memset(data, 0, size);
+            *result = S_OK;
+        }
+        LONG code = g_key_code;
+        if (code > 0 && code < 256 && Due(&g_key_until)) {
+            static_cast<unsigned char*>(data)[code] = 0x80;
+        }
+    }
+}
+
+}  // namespace mw4hook

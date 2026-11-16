@@ -7,3 +7,4 @@ EXPORTS
     DllGetClassObject=Proxy_DllGetClassObject
     DllRegisterServer=Proxy_DllRegisterServer
     DllUnregisterServer=Proxy_DllUnregisterServer
+    Mw4ShellMode=Mw4ShellMode

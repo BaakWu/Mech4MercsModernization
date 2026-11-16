@@ -41,23 +41,21 @@ void LoadConfig() {
     slash[1] = L'\0';
     wcscat_s(path, MAX_PATH, L"mw4hook.ini");
 
-    g_config.window_width = static_cast<int>(GetPrivateProfileIntW(
-        L"window", L"width", g_config.window_width, path));
-    g_config.window_height = static_cast<int>(GetPrivateProfileIntW(
-        L"window", L"height", g_config.window_height, path));
     g_config.window_enabled =
         GetPrivateProfileIntW(L"window", L"enabled", 1, path) != 0;
     g_config.relaunch =
         GetPrivateProfileIntW(L"window", L"relaunch", 1, path) != 0;
     g_config.hooks_enabled =
         GetPrivateProfileIntW(L"hook", L"enabled", 1, path) != 0;
-    g_config.resolution_enabled =
-        GetPrivateProfileIntW(L"resolution", L"enabled", 1, path) != 0;
-    g_config.resolution_width = static_cast<int>(GetPrivateProfileIntW(
-        L"resolution", L"width", g_config.resolution_width, path));
-    g_config.resolution_height = static_cast<int>(GetPrivateProfileIntW(
-        L"resolution", L"height", g_config.resolution_height, path));
+    g_config.display_enabled =
+        GetPrivateProfileIntW(L"display", L"enabled", 1, path) != 0;
+    g_config.checkbox_enabled =
+        GetPrivateProfileIntW(L"display", L"checkbox", 1, path) != 0;
     g_config.log_enabled = GetPrivateProfileIntW(L"log", L"enabled", 1, path) != 0;
+    g_config.debug_dump_image =
+        GetPrivateProfileIntW(L"debug", L"dump_image", 0, path) != 0;
+    g_config.debug_automation =
+        GetPrivateProfileIntW(L"debug", L"automation", 0, path) != 0;
 }
 
 }  // namespace

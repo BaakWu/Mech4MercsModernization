@@ -1,8 +1,10 @@
 // mw4hook - dinput.dll proxy entry point.
 //
 // The game imports dinput.dll statically, so this module is loaded during
-// startup. If the process lacks -window, the proxy relaunches it with the
-// switch, then the relaunched process installs the window sizing hooks.
+// startup. If the -window switch does not match the Windowed setting in
+// options.ini, the proxy relaunches the game once with the switch added or
+// removed; the (re)launched process then installs the display, window and
+// shell-script hooks.
 #include "hook.h"
 
 namespace {
@@ -46,12 +48,63 @@ void EnableDpiAwareness() {
     mw4hook::Log("dpi: awareness not set (%lu)\n", GetLastError());
 }
 
+// Development aid: write the unpacked in-memory image of MW4Mercs.exe to
+// mw4hook-image-<pid>.bin (file offset == RVA). The 3.1c executable is
+// PECompact packed and AntiHack denies external PROCESS_VM_READ, so this is
+// the reliable way to get a static-analysis copy. Off unless
+// [debug] dump_image=1.
+void DumpImage() {
+    auto* base = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS32*>(base + dos->e_lfanew);
+    const DWORD size = nt->OptionalHeader.SizeOfImage;
+
+    wchar_t path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    wchar_t* slash = len ? wcsrchr(path, L'\\') : nullptr;
+    if (!slash) {
+        return;
+    }
+    wsprintfW(slash + 1, L"mw4hook-image-%lu.bin", GetCurrentProcessId());
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    static unsigned char zero[0x1000];
+    for (DWORD off = 0; off < size; off += 0x1000) {
+        MEMORY_BASIC_INFORMATION info{};
+        const unsigned char* page = zero;
+        if (VirtualQuery(base + off, &info, sizeof(info)) == sizeof(info) &&
+            info.State == MEM_COMMIT &&
+            !(info.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+            page = base + off;
+        }
+        DWORD written = 0;
+        WriteFile(file, page, 0x1000, &written, nullptr);
+    }
+    CloseHandle(file);
+    mw4hook::Log("debug: dumped %lu bytes of image to mw4hook-image\n", size);
+}
+
 DWORD WINAPI HookThread(LPVOID) {
-    Sleep(100);
+    const mw4hook::Config& config = mw4hook::GetConfig();
+    bool display_done = !config.hooks_enabled || !config.display_enabled;
+    bool script_done = !config.hooks_enabled || !config.checkbox_enabled;
+    // The packed image is unpacked by the time imports are resolved, but
+    // retry briefly in case a pattern is not readable yet.
     for (int i = 0; i < 300; ++i) {
-        mw4hook::ApplyResolutionDefaults();
+        if (!display_done) {
+            display_done = mw4hook::InstallDisplayHooks();
+        }
+        if (!script_done) {
+            script_done = mw4hook::InstallShellScriptHook();
+        }
         mw4hook::InstallHooks();
         Sleep(10);
+    }
+    if (mw4hook::GetConfig().debug_dump_image) {
+        DumpImage();
     }
     for (int i = 0; i < 240; ++i) {
         mw4hook::InstallHooks();
@@ -87,7 +140,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         mw4hook::Log("dllmain: process attach\n");
         EnableDpiAwareness();
         mw4hook::ResolveDinputExports();
-        mw4hook::RelaunchWindowed();
+        mw4hook::DisplayInit();
+        mw4hook::EnsureLaunchMode();
+        mw4hook::AutomationInit();
         mw4hook::Log("dllmain: attach complete\n");
         HANDLE thread = CreateThread(nullptr, 0, HookThread, nullptr, 0, nullptr);
         if (thread) {

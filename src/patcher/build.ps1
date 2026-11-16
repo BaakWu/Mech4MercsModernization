@@ -92,6 +92,9 @@ $command = @(
     "`"$resFile`""
     "/Fe:`"$exe`""
     '/link advapi32.lib ole32.lib uuid.lib shell32.lib user32.lib /SUBSYSTEM:CONSOLE'
+    # Embed a manifest that requests no elevation. Without one, Windows'
+    # installer detection sees "patch" in the name and forces a UAC prompt.
+    "/MANIFEST:EMBED /MANIFESTUAC:`"level='asInvoker' uiAccess='false'`""
 ) -join ' '
 
 $full = "call `"$vcvars`" x86 >nul && $command"

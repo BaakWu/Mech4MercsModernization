@@ -1,15 +1,20 @@
 // mw4hook - runtime compatibility layer for MW4 Mercenaries 3.1c
 //
 // dinput.dll proxy. The game imports dinput.dll statically, so this proxy is
-// loaded during startup. If the process was not started with -window, it
-// relaunches itself with the switch; the relaunched process handles the
-// normal window sizing hooks.
+// loaded during startup, before the game parses its command line. The proxy
+// makes the launch mode match the Windowed setting (relaunching once if the
+// -window switch has to be added or removed) and installs the display, window
+// and shell-script hooks.
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 namespace mw4hook {
+
+// Option id answered by the hook for ShellGetOptionValue/ShellSetOptionValue.
+// The game's own MWO_* ids are 0..34.
+constexpr int kMwoWindowed = 200;
 
 // Logging
 void LogInit(HINSTANCE self);
@@ -19,13 +24,32 @@ void Log(const char* fmt, ...);
 void InstallHooks();
 int InstallWindowHooks();
 
-// Relaunch the game with -window when the command line lacks it.
-void RelaunchWindowed();
+// Relaunch the game when its -window switch does not match the Windowed
+// setting. Returns only if no relaunch was needed (or it failed).
+void EnsureLaunchMode();
 
 // Replace an imported function by matching its resolved address.
 bool PatchIatByAddress(HMODULE module, const char* dll_name,
                        HMODULE target_module, void* target, void* detour,
                        void** original);
+
+// Code patching (detour.cpp).
+unsigned char* FindUnique(const char* name, const char* pattern);
+bool WriteCode(void* address, const void* data, size_t size);
+void* InstallDetour(unsigned char* target, size_t stolen, void* hook, void** trampoline_out);
+
+// Display controller (display.cpp).
+void DisplayInit();
+bool InstallDisplayHooks();
+bool DesiredWindowed();
+int ShellMode();
+void SetWindowedMode(bool windowed);
+void NoteAppliedMode(bool windowed);
+void SelectedSize(int* width, int* height);
+bool GameFullscreen();
+
+// Options > Video "Windowed" checkbox script injection (shellscript.cpp).
+bool InstallShellScriptHook();
 
 // Runtime configuration (mw4hook.ini next to the game executable).
 struct Config {
@@ -33,18 +57,25 @@ struct Config {
     bool hooks_enabled = true;
     bool window_enabled = true;
     bool relaunch = true;
-    bool resolution_enabled = true;
-    int window_width = 1024;
-    int window_height = 768;
-    int resolution_width = 1024;
-    int resolution_height = 768;
+    bool display_enabled = true;
+    bool checkbox_enabled = true;
+    bool debug_dump_image = false;
+    bool debug_automation = false;
 };
 
 const Config& GetConfig();
 
-// Rewrite the game's built-in 800x600 display defaults to the configured
-// resolution. This affects the game's internal render size, not just the
-// Win32 window.
-void ApplyResolutionDefaults();
+// The game's top-level window once it has been created, else nullptr.
+HWND MainWindow();
+
+// Development-only test automation (see automation.cpp).
+void AutomationInit();
+bool AutomationCursor(POINT* client_pos);
+bool AutomationSetCursor(POINT client_pos);
+
+// Frontend cursor mapping (cursor.cpp).
+void InstallCursorHooks(HMODULE module);
+bool ShellToClient(int x, int y, POINT* client_pos);
+void AutomationFilterDeviceState(DWORD size, void* data, HRESULT* result);
 
 }  // namespace mw4hook

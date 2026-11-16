@@ -27,11 +27,15 @@ New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 $OutDir = [IO.Path]::GetFullPath($OutDir)
 
 $sources = @(
+    'automation.cpp',
+    'cursor.cpp',
+    'detour.cpp',
     'dinput_proxy.cpp',
+    'display.cpp',
     'dllmain.cpp',
     'iat.cpp',
     'log.cpp',
-    'resolution.cpp',
+    'shellscript.cpp',
     'window.cpp'
 ) | ForEach-Object { Join-Path $src $_ }
 

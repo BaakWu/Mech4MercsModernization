@@ -20,15 +20,38 @@ On install it:
 3. refuses to run while `MW4Mercs.exe` is running,
 4. backs up `options.ini`, any conflicting `dinput.dll` / `ddraw.dll` /
    `mw4hook.ini`, and the existing game shortcut,
-5. patches the `[graphics options]` display keys to 1024x768, 32-bit,
+5. patches the `[graphics options]` display keys to 1024x768, 32-bit, and
+   `windowed=true` (the Options > Video > Windowed checkbox; see
+   `docs/HOOK.md`),
 6. extracts `dinput.dll`, `ddraw.dll`, and `mw4hook.ini`,
 7. creates `MechWarrior 4 Mercenaries (Windowed).lnk` and updates the existing
    `Shortcut to MW4Mercs.exe.lnk` to use `-window`,
 8. writes `mw4patch-install.ini` with installed hashes and backup names.
 
-The game executable is never modified. The proxy relaunches a raw
-`MW4Mercs.exe` launch with `-window`; the patched shortcuts pass the switch
-directly.
+The game executable is never modified. The proxy makes the `-window` switch
+follow the Windowed setting: a raw `MW4Mercs.exe` launch is relaunched with
+`-window` while Windowed is on, and a shortcut's `-window` is dropped by the
+same relaunch when the player has turned Windowed off. The patched shortcuts
+pass the switch directly, which matches the default.
+
+## Elevation
+
+`mw4patch.exe` embeds a manifest with `requestedExecutionLevel
+level='asInvoker'`. Without it, Windows' installer detection (the word
+"patch" in the file name) forces a UAC "Do you want to allow this app to make
+changes" prompt on every run. The patcher only needs write access to the game
+directory; for an install under `Program Files`, run it from an elevated
+prompt.
+
+## Double-click
+
+Started without arguments (double-clicked in Explorer), the patcher finds the
+game by itself: its own folder, the current folder, `..\MekTek\<game>` (repo
+layout), then `Program Files (x86)\MekTek.net\...` and
+`Program Files\MekTek.net\...`. If none contains `MW4Mercs.exe`, it asks for
+the folder (drag it into the window). It then shows the install plan and asks
+for confirmation, or offers to uninstall if the patch is already installed.
+The console waits for Enter before closing so the result can be read.
 
 ## Commands
 

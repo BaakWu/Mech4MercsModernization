@@ -1,0 +1,422 @@
+// Display controller: windowed/fullscreen setting, frontend resolution, and
+// the Video Options "Windowed" checkbox backend.
+//
+// GameOS keeps every display change behind one entry point,
+// gos_SetScreenMode (12 stdcall arguments). It only records the request and
+// sets a pending flag; the main loop applies it on the next frame through the
+// windowed or the fullscreen setup routine. Argument 8 requests fullscreen and
+// argument 10 requests windowed. The game never sets either flag itself.
+//
+// The hook wraps gos_SetScreenMode and:
+//   - replaces every requested size with the selected resolution, so the
+//     2002 shell (which always asks for 800x600) runs at the same size as the
+//     mission and the frontend scaler fills the window,
+//   - raises 16-bit requests to 32-bit,
+//   - sets the fullscreen/windowed request flags from the Windowed setting.
+//
+// The Shell_CallbackHandler is wrapped to answer a new option id
+// (kMwoWindowed) for ShellGetOptionValue/ShellSetOptionValue, to apply a
+// Resolution change immediately, and to persist both on ShellSaveOptions.
+//
+// options.ini [graphics options]:
+//   windowed=true|false      new key; missing means true
+//   screenwidth/screenheight the selected resolution (existing keys)
+#include "hook.h"
+
+#include <cstdio>
+#include <cstring>
+
+namespace mw4hook {
+namespace {
+
+constexpr int kMwoScreenResolution = 7;
+constexpr int kMwoUseExtendedVisibility = 34;
+constexpr int kShellSetOptionValue = 49;
+constexpr int kShellGetOptionValue = 50;
+constexpr int kShellSaveOptions = 51;
+constexpr int kResolutionCount = 29;
+
+using SetScreenMode_t = void(__stdcall*)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
+                                         DWORD, DWORD, DWORD, DWORD, DWORD, DWORD);
+using ShellCallback_t = int(__stdcall*)(DWORD, DWORD, int*);
+
+SetScreenMode_t g_set_screen_mode = nullptr;   // trampoline
+ShellCallback_t g_shell_callback = nullptr;    // trampoline
+
+// Game globals (located from the gos_SetScreenMode and mode-handler code).
+volatile DWORD* g_bpp = nullptr;
+volatile DWORD* g_device = nullptr;
+volatile BYTE* g_arg5 = nullptr;
+volatile BYTE* g_arg6 = nullptr;
+volatile BYTE* g_arg7 = nullptr;
+volatile BYTE* g_fullscreen = nullptr;
+volatile DWORD* g_mission_width = nullptr;    // the game's own selected size
+volatile DWORD* g_mission_height = nullptr;
+const DWORD* g_resolutions = nullptr;         // 29 (width, height) pairs
+
+bool g_windowed = true;
+int g_sel_width = 1024;
+int g_sel_height = 768;
+
+// The size the game last asked for. 800x600 means the shell (frontend or the
+// in-mission options overlay); anything else is the mission.
+DWORD g_req_width = 800;
+DWORD g_req_height = 600;
+
+// What the script builtins getresx()/getresy() report. The shell scripts lay
+// themselves out with these (centered dialogs, help text, loading screens),
+// so they must stay 800x600 while the shell renders at a larger size.
+volatile DWORD g_script_resx = 800;
+volatile DWORD g_script_resy = 600;
+wchar_t g_options_path[MAX_PATH] = {};
+bool g_installed = false;
+
+bool SaneSize(int w, int h) { return w >= 640 && h >= 480 && w <= 16384 && h <= 16384; }
+
+void OptionsPath() {
+    DWORD len = GetModuleFileNameW(nullptr, g_options_path, MAX_PATH);
+    wchar_t* slash = len ? wcsrchr(g_options_path, L'\\') : nullptr;
+    if (!slash) {
+        g_options_path[0] = L'\0';
+        return;
+    }
+    slash[1] = L'\0';
+    wcscat_s(g_options_path, L"options.ini");
+}
+
+void PersistWindowed() {
+    if (g_options_path[0]) {
+        WritePrivateProfileStringW(L"graphics options", L"windowed",
+                                   g_windowed ? L"true" : L"false", g_options_path);
+    }
+}
+
+void PersistResolution() {
+    if (!g_options_path[0]) {
+        return;
+    }
+    wchar_t value[16];
+    swprintf_s(value, L"%d", g_sel_width);
+    WritePrivateProfileStringW(L"graphics options", L"screenwidth", value, g_options_path);
+    swprintf_s(value, L"%d", g_sel_height);
+    WritePrivateProfileStringW(L"graphics options", L"screenheight", value, g_options_path);
+}
+
+int ResolutionIndex(int w, int h) {
+    if (!g_resolutions) {
+        return -1;
+    }
+    for (int i = 0; i < kResolutionCount; ++i) {
+        if (static_cast<int>(g_resolutions[i * 2]) == w &&
+            static_cast<int>(g_resolutions[i * 2 + 1]) == h) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void SyncGameSelectedSize() {
+    if (g_mission_width && g_mission_height) {
+        *g_mission_width = static_cast<DWORD>(g_sel_width);
+        *g_mission_height = static_cast<DWORD>(g_sel_height);
+    }
+}
+
+void __stdcall Hook_SetScreenMode(DWORD width, DWORD height, DWORD bpp, DWORD device,
+                                  DWORD a5, DWORD a6, DWORD a7, DWORD goto_full,
+                                  DWORD a9, DWORD goto_window, DWORD a11,
+                                  DWORD renderer) {
+    const DWORD req_w = width;
+    const DWORD req_h = height;
+    g_req_width = req_w;
+    g_req_height = req_h;
+    SyncGameSelectedSize();
+    const bool shell = req_w == 800 && req_h == 600;
+    width = static_cast<DWORD>(g_sel_width);
+    height = static_cast<DWORD>(g_sel_height);
+    if (shell && (width < 800 || height < 600)) {
+        // The shell is laid out for 800x600; never render it smaller (it
+        // would be cropped). Smaller modes apply to missions only, as in the
+        // original game.
+        width = 800;
+        height = 600;
+    }
+    g_script_resx = shell ? 800 : width;
+    g_script_resy = shell ? 600 : height;
+    if (bpp == 16) {
+        bpp = 32;
+    }
+    const bool fullscreen_now = g_fullscreen && *g_fullscreen != 0;
+    goto_full = (!g_windowed && !fullscreen_now) ? 1 : 0;
+    goto_window = (g_windowed && fullscreen_now) ? 1 : 0;
+    Log("gos_SetScreenMode %lux%lu -> %lux%lux%lu %s%s%s\n", req_w, req_h, width,
+        height, bpp, fullscreen_now ? "[fullscreen]" : "[windowed]",
+        goto_full ? " goto-fullscreen" : "", goto_window ? " goto-windowed" : "");
+    g_set_screen_mode(width, height, bpp, device, a5, a6, a7, goto_full, a9,
+                      goto_window, a11, renderer);
+}
+
+// Re-issue the current mode with the hook's size/flags. Runs on the game
+// thread (from a script callback); the switch itself happens next frame.
+void ApplyDisplay() {
+    if (!g_set_screen_mode || !g_bpp) {
+        return;
+    }
+    SyncGameSelectedSize();
+    // Re-issue the game's last request so shell/mission state is preserved.
+    Hook_SetScreenMode(g_req_width, g_req_height, *g_bpp, *g_device, *g_arg5, *g_arg6,
+                       *g_arg7, 0, 0, 0, 0, 0);
+}
+
+int CallOriginal(DWORD a1, DWORD a2, int cmd, int option, int* value) {
+    int args[3] = {cmd, option, reinterpret_cast<int>(value)};
+    return g_shell_callback(a1, a2, args);
+}
+
+int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
+    const int cmd = args ? args[0] : -1;
+    if ((cmd == kShellGetOptionValue || cmd == kShellSetOptionValue) && args[2]) {
+        const int option = args[1];
+        int* value = reinterpret_cast<int*>(args[2]);
+        if (option == kMwoWindowed) {
+            if (cmd == kShellGetOptionValue) {
+                *value = g_windowed ? 1 : 0;
+            } else {
+                SetWindowedMode(*value != 0);
+            }
+            return 1;
+        }
+        if (option == kMwoScreenResolution && g_resolutions) {
+            if (cmd == kShellGetOptionValue) {
+                int result = g_shell_callback(a1, a2, args);
+                int index = ResolutionIndex(g_sel_width, g_sel_height);
+                if (index >= 0) {
+                    *value = index;
+                }
+                return result;
+            }
+            // 3.1c's SetOptionValue(7) falls through into the
+            // UseExtendedVisibility case and stores the resolution index
+            // there too. Preserve that option across the call.
+            int extended = 0;
+            CallOriginal(a1, a2, kShellGetOptionValue, kMwoUseExtendedVisibility, &extended);
+            int result = g_shell_callback(a1, a2, args);
+            CallOriginal(a1, a2, kShellSetOptionValue, kMwoUseExtendedVisibility, &extended);
+            const int index = *value;
+            if (index >= 0 && index < kResolutionCount) {
+                const int w = static_cast<int>(g_resolutions[index * 2]);
+                const int h = static_cast<int>(g_resolutions[index * 2 + 1]);
+                if (SaneSize(w, h) && (w != g_sel_width || h != g_sel_height)) {
+                    g_sel_width = w;
+                    g_sel_height = h;
+                    Log("display: resolution -> %dx%d (index %d)\n", w, h, index);
+                    ApplyDisplay();
+                }
+            }
+            return result;
+        }
+    }
+    int result = g_shell_callback(a1, a2, args);
+    if (cmd == kShellSaveOptions) {
+        // The game rewrites screenwidth/screenheight from its own index map,
+        // which disagrees with the dropdown for some entries. Write ours last.
+        PersistResolution();
+        PersistWindowed();
+    }
+    return result;
+}
+
+// Point the getresx()/getresy() builtins (expression evaluator cases) at the
+// hook's script-size variables instead of the render size.
+void PatchScriptResolution(const DWORD* width_global, const DWORD* height_global) {
+    unsigned char* p = FindUnique(
+        "script_getres",
+        "80 38 2F 75 22 80 78 01 32 75 1C 83 C0 02 5F A3 ?? ?? ?? ?? A1 ?? ?? ?? ?? 5E 5D D1 E8");
+    if (!p) {
+        return;
+    }
+    struct Site {
+        size_t offset;
+        const DWORD* expected;
+        volatile DWORD* replacement;
+    };
+    const Site sites[] = {
+        {0x15, width_global, &g_script_resx},   // getresx() / 2
+        {0x28, width_global, &g_script_resx},   // getresx()
+        {0x4F, height_global, &g_script_resy},  // getresy()
+    };
+    for (const Site& site : sites) {
+        if (p[site.offset - 1] != 0xA1 ||
+            *reinterpret_cast<DWORD*>(p + site.offset) !=
+                reinterpret_cast<DWORD>(site.expected)) {
+            Log("display: getres site +0x%zX unexpected; not patched\n", site.offset);
+            return;
+        }
+    }
+    for (const Site& site : sites) {
+        DWORD address = reinterpret_cast<DWORD>(site.replacement);
+        WriteCode(p + site.offset, &address, 4);
+    }
+    Log("display: getresx/getresy report the shell layout size\n");
+}
+
+void Patch16BitFallbacks() {
+    static const unsigned char k32[4] = {0x20, 0, 0, 0};
+    unsigned char* renderer = FindUnique(
+        "bpp16_renderer",
+        "7D 08 39 1D ?? ?? ?? ?? 75 0A C7 05 ?? ?? ?? ?? 10 00 00 00 8B 15");
+    if (renderer) {
+        WriteCode(renderer + 16, k32, 4);
+    }
+    unsigned char* fallback = FindUnique(
+        "bpp16_fallback", "53 53 6A 10 51 52 50 C7 05 ?? ?? ?? ?? 10 00 00 00 C6 05");
+    if (fallback) {
+        static const unsigned char push32 = 0x20;
+        WriteCode(fallback + 3, &push32, 1);
+        WriteCode(fallback + 13, k32, 4);
+    }
+    Log("display: 16-bit fallbacks raised to 32-bit (%s/%s)\n",
+        renderer ? "ok" : "missing", fallback ? "ok" : "missing");
+}
+
+}  // namespace
+
+void DisplayInit() {
+    OptionsPath();
+    if (!g_options_path[0]) {
+        return;
+    }
+    wchar_t value[32] = {};
+    GetPrivateProfileStringW(L"graphics options", L"windowed", L"true", value, 32,
+                             g_options_path);
+    g_windowed = !(_wcsicmp(value, L"false") == 0 || wcscmp(value, L"0") == 0);
+    int w = static_cast<int>(GetPrivateProfileIntW(L"graphics options", L"screenwidth",
+                                                   1024, g_options_path));
+    int h = static_cast<int>(GetPrivateProfileIntW(L"graphics options", L"screenheight",
+                                                   768, g_options_path));
+    if (SaneSize(w, h)) {
+        g_sel_width = w;
+        g_sel_height = h;
+    }
+    Log("display: windowed=%d selected=%dx%d\n", g_windowed ? 1 : 0, g_sel_width,
+        g_sel_height);
+}
+
+bool DesiredWindowed() { return g_windowed; }
+
+int ShellMode() {
+    if (!g_set_screen_mode) {
+        return -1;  // display hooks not active: unknown
+    }
+    return g_req_width == 800 && g_req_height == 600 ? 1 : 0;
+}
+
+void SelectedSize(int* width, int* height) {
+    *width = g_sel_width;
+    *height = g_sel_height;
+}
+
+bool GameFullscreen() { return g_fullscreen && *g_fullscreen != 0; }
+
+// GameOS can change the mode on its own: Alt+Enter sets its go-windowed or
+// go-fullscreen flag directly, and a fullscreen setup that fails falls back
+// to the windowed path. The window hooks report the mode actually applied so
+// the checkbox and options.ini stay truthful.
+void NoteAppliedMode(bool windowed) {
+    if (windowed == g_windowed) {
+        return;
+    }
+    g_windowed = windowed;
+    Log("display: game switched to %s on its own; setting updated\n",
+        windowed ? "windowed" : "fullscreen");
+    PersistWindowed();
+}
+
+void SetWindowedMode(bool windowed) {
+    if (windowed == g_windowed) {
+        return;
+    }
+    g_windowed = windowed;
+    Log("display: windowed -> %d\n", windowed ? 1 : 0);
+    PersistWindowed();
+    ApplyDisplay();
+}
+
+// Installs the display hooks once the unpacked code is present. Returns true
+// when done (successfully or not) so the caller stops retrying.
+bool InstallDisplayHooks() {
+    if (g_installed) {
+        return true;
+    }
+    unsigned char* ssm = FindUnique(
+        "gos_SetScreenMode",
+        "8B 4C 24 04 A1 ?? ?? ?? ?? 8B 54 24 20 53 55 8B 6C 24 14 56 8B 74 24 3C "
+        "57 8B 7C 24 18 3B C8 8B 44 24 28");
+    if (!ssm) {
+        return false;  // not unpacked yet; retry
+    }
+    g_installed = true;
+    unsigned char* handler = FindUnique(
+        "mode_handler",
+        "A0 ?? ?? ?? ?? 84 C0 74 0C A0 ?? ?? ?? ?? 84 C0 75 03 32 C0 C3 A1 ?? ?? ?? ?? 50 FF 15");
+    unsigned char* sel = FindUnique("selected_res_switch",
+                                    "8B 46 30 83 F8 1C 0F 87 ?? ?? ?? ?? FF 24 85 ?? ?? ?? ??");
+    unsigned char* table = FindUnique(
+        "resolution_table", "BF ?? ?? ?? ?? 8B F1 2B F9 2B F3 89 44 24 14 BD ?? ?? ?? ??");
+    unsigned char* callback = FindUnique("shell_callback",
+                                         "8B 44 24 0C 8B 08 41 81 F9 E8 00 00 00 0F 87");
+    if (!handler) {
+        Log("display: mode handler not found; display hooks disabled\n");
+        return true;
+    }
+
+    auto addr = [](unsigned char* p) { return *reinterpret_cast<DWORD*>(p); };
+    g_bpp = reinterpret_cast<DWORD*>(addr(ssm + 0x2F));
+    g_device = reinterpret_cast<DWORD*>(addr(ssm + 0x43));
+    g_arg5 = reinterpret_cast<BYTE*>(addr(ssm + 0x4F));
+    g_arg6 = reinterpret_cast<BYTE*>(addr(ssm + 0x57));
+    g_arg7 = reinterpret_cast<BYTE*>(addr(ssm + 0x63));
+    g_fullscreen = reinterpret_cast<BYTE*>(addr(handler + 1));
+
+    if (sel) {
+        // First case: C7 05 <width global> <w> C7 05 <height global> <h>
+        auto* cases = reinterpret_cast<DWORD*>(addr(sel + 0x0F));
+        auto* first = reinterpret_cast<unsigned char*>(cases[0]);
+        if (first[0] == 0xC7 && first[1] == 0x05 && first[10] == 0xC7 && first[11] == 0x05) {
+            g_mission_width = reinterpret_cast<DWORD*>(addr(first + 2));
+            g_mission_height = reinterpret_cast<DWORD*>(addr(first + 12));
+        }
+    }
+    if (table) {
+        auto* entries = reinterpret_cast<const DWORD*>(addr(table + 0x10));
+        bool ok = true;
+        for (int i = 0; i < kResolutionCount; ++i) {
+            ok = ok && SaneSize(static_cast<int>(entries[i * 2]),
+                                static_cast<int>(entries[i * 2 + 1]));
+        }
+        g_resolutions = ok ? entries : nullptr;
+    }
+    Log("display: globals bpp=%p fullscreen=%p mission=%p/%p table=%p\n", g_bpp,
+        g_fullscreen, g_mission_width, g_mission_height, g_resolutions);
+
+    SyncGameSelectedSize();
+    Patch16BitFallbacks();
+    PatchScriptResolution(reinterpret_cast<DWORD*>(addr(ssm + 5)),
+                          reinterpret_cast<DWORD*>(addr(ssm + 0x27)));
+
+    InstallDetour(ssm, 9, reinterpret_cast<void*>(&Hook_SetScreenMode),
+                  reinterpret_cast<void**>(&g_set_screen_mode));
+    if (callback) {
+        InstallDetour(callback, 6, reinterpret_cast<void*>(&Hook_ShellCallback),
+                      reinterpret_cast<void**>(&g_shell_callback));
+    }
+    Log("display: hooks %s / %s\n", g_set_screen_mode ? "ok" : "failed",
+        g_shell_callback ? "ok" : "failed");
+    return true;
+}
+
+}  // namespace mw4hook
+
+// For the ddraw proxy: 1 while the game shows its 800x600 shell (frontend,
+// loading screens, in-mission options overlay), 0 in a mission, -1 unknown.
+extern "C" int WINAPI Mw4ShellMode() { return mw4hook::ShellMode(); }

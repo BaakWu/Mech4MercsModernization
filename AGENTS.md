@@ -77,7 +77,17 @@ extraction was verified against the 32-file core manifest with 32/32 matches.
 
 ## 3. First release scope
 
-### 3.1 Required in the first public patch
+### 3.0 Scope change (2026-11-15)
+
+The **initial release is now only a windowed-mode patch**: launch windowed at
+1024x768, keep the in-game resolution menu working, and the Options > Video
+Windowed setting. The other items in 3.1 move to later releases. Problems
+found in play testing of the windowed/fullscreen work (fullscreen setting not
+sticking, MechLab/FMV placement, mission rendering artifacts, garbled audio)
+are tracked in `docs/KNOWN-ISSUES.md` and must be resolved or the related
+parts disabled before release.
+
+### 3.1 Required in the first public patch (original list)
 
 1. Launch the game in **windowed mode at 1024x768**.
 2. Keep the **in-game options menu resolution controls working** so the player
@@ -279,7 +289,8 @@ be copied or redistributed.
 | `docs/PATCHING.md` | MTX ZIP layout, why the old patcher is unreliable |
 | `docs/REBIRTH.md` | Rebirth status and the unverified Phase 2 claim |
 | `docs/ROADMAP.md` | Milestones and non-goals |
-| `docs/HOOK.md` | Development `dinput.dll` hook: windowed 1024x768 and limitations |
+| `docs/HOOK.md` | Development `dinput.dll` hook: windowed mode, Windowed checkbox, frontend scaling |
+| `docs/KNOWN-ISSUES.md` | Open problems from play testing (rendering, audio, fullscreen) |
 | `docs/PATCHER.md` | Development `mw4patch.exe`: verification, install, backups, uninstall |
 | `manifests/` | Core and full hash manifests |
 | `templates/options.ini` | Known-good configuration template |
@@ -407,6 +418,8 @@ High-value files:
 - Hardware Error root cause identified.
 - `-window` switch confirmed.
 - Windowed mode tested: it ignores requested resolution and uses 800x600.
+  Root cause (3.1c): the shell always calls `gos_SetScreenMode(800, 600, ...)`;
+  the windowed path itself honors the requested size.
 - Rebirth Phase 2 claim reviewed and marked unverified.
 - Native hook implemented as a `dinput.dll` proxy. A `version.dll` proxy does
   not load in the packed 3.1c executable, and a `ddraw.dll` proxy loads too
@@ -418,26 +431,51 @@ High-value files:
   switch before the game initializes. The first process exits; the visible
   process runs windowed. This avoids the in-process forcing path that triggered
   the `GetLocationFromAddress` assert.
-- The game's built-in 800x600 display defaults and windowed-mode pushes are
-  patched in memory; `MW4Mercs.exe` is unchanged on disk.
+- Issue #1 (Windowed checkbox) implemented, see `docs/HOOK.md`:
+  - Options > Video has a Windowed checkbox (same widget/bitmap/font as
+    MekTek's Use Extended Visibility), added by rewriting
+    `mercsshellscripts\OM_Video.script` in memory after it is decompressed
+    from `RESOURCE\props.mw4`. The shell UI is gosScript source; it is not in
+    `core.mw4` (an earlier note here was wrong).
+  - Toggling switches windowed <-> fullscreen without a restart through a
+    detour on GameOS `gos_SetScreenMode` (3.1c `0x0070F8B0`); stored as
+    `[graphics options] windowed=` in `options.ini`; the launch-time
+    `-window` switch follows the setting (one relaunch if needed).
+  - The frontend runs at the selected resolution in both modes, scaled to a
+    centered 4:3 viewport; `getresx()`/`getresy()` report 800x600 to the
+    shell scripts; the cursor is mapped to the scaled picture.
+  - Resolution changes apply immediately; 16-bit requests and the
+    fullscreen 16-bit fallbacks are raised to 32-bit.
+  - Verified in-process from a fresh extraction; AntiHack/multiplayer and the
+    100-cycle test are still open.
+- `MW4Mercs.exe` is unchanged on disk; all code changes are in memory and
+  located by unique byte patterns (the old fixed 800x600 immediate patches
+  were removed; one of them also turned the 800x600 menu entry into 1024x768).
 - The process opts out of DPI virtualization before creating its window. At
   125% display scaling the client is a true 1024x768 physical area; the extra
   scaled band is gone. This also removes the virtualized cursor mismatch that
   contributed to the Windows-scaling torso drift.
-- The 2002 frontend shell still generates 800x600, but the `ddraw.dll` proxy
-  scales it to the 1024x768 window and skips in-mission frames. The main menu,
-  Roster, and Options screens fill the window; menu cursor and hit areas remain
-  aligned with the scaled artwork.
+- The 2002 frontend shell still generates 800x600; the `ddraw.dll` proxy
+  scales it (windowed: `Blt`; fullscreen: `Flip`) and skips mission frames.
+  The shell hit-tests in render pixels, so the cursor is mapped into the
+  800x600 shell space (`src/hook/cursor.cpp`); before that mapping the scaled
+  menus were not actually aligned with the cursor.
 - In-mission rendering at 1024x768 is verified to fill the window.
 - The in-game Options > Video tab is verified to show the Screen Resolution
   control at 1024x768.
 - The hook reaches the main menu and remains responsive. Test-only intro-skip
   and window-inspection helpers were added.
+- Test automation runs inside the game process (`[debug] automation=1`,
+  `tools/Send-Mw4Automation.ps1`): virtual cursor, posted clicks/keys, frame
+  capture from the ddraw proxy. It never touches the real cursor, focus or
+  desktop. AntiHack denies external memory reads, so `[debug] dump_image=1`
+  writes the unpacked image for static analysis.
 - The process window/display path is documented in `docs/HOOK.md`.
 - A single-executable development patcher (`mw4patch.exe`) now:
   - verifies `MW4Mercs.exe` and the 32-file core manifest,
   - backs up `options.ini`, conflicting hook files, and the existing shortcut,
-  - patches the display keys to 1024x768/32-bit,
+  - patches the display keys to 1024x768/32-bit and `windowed=true`,
+  - embeds an `asInvoker` manifest (no installer-detection UAC prompt),
   - installs the embedded `dinput.dll`, `ddraw.dll`, and `mw4hook.ini`,
   - installs and backs up `ddraw.dll` as part of the same rollback record,
   - creates a windowed shortcut and updates the existing game shortcut,
@@ -449,7 +487,10 @@ High-value files:
 
 - Test AntiHack and multiplayer integrity with the `dinput.dll` and `ddraw.dll`
   proxies present.
-- Map the retail oracle functions to the 3.1c binary with pattern scanning.
+- Map the remaining retail oracle functions to the 3.1c binary with pattern
+  scanning (display, script and archive paths are mapped in `docs/HOOK.md`).
+- Run the issue #1 acceptance items still open: 100 toggle/mode cycles, rapid
+  toggles, AntiHack and multiplayer join with the detours present.
 - Find the exact 3.1c mouse aim/dead-zone code and the leg-turn mouse lock.
 - Verify the Windows-scaling torso drift fix with real mouse aim.
 - Identify the menu first-click delay and second-click loss.
@@ -457,16 +498,14 @@ High-value files:
 - Identify the second-video-card mipmap bug.
 - Identify the `imagehlp.dll` crash path.
 - Identify the menu message-dispatch crash.
-- Confirm how to force 32-bit color after a failed mode switch.
+- Test the software renderer (renderer 3) now that its 16-bit fallback is
+  raised to 32-bit.
+- Investigate the Resolution dropdown selecting index 0 after scrolling (it
+  reproduces with the display hooks disabled).
 - Decide whether the in-game resolution list should be extended beyond
   1600x1200.
 - Confirm the WASD throttle-decay design and whether it belongs in the same
   hook as the input fixes.
-- Decide whether an in-game "Windowed" checkbox is worth adding. The Video
-  tab is built from packed `content\Interfaces\Common\*interface.control`
-  data inside `RESOURCE\core.mw4`, not from loose files, so adding a control
-  requires unpacking/repacking the archive and wiring a shell-script callback.
-  A launcher-side windowed option is the smaller first step.
 
 ## 10. Definition of done for the first release
 

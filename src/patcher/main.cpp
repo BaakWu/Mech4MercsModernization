@@ -522,7 +522,9 @@ bool PatchOptionsIni(const std::wstring& install, std::wstring& error) {
         {"videodriverindex", "0"},
         {"screenwidth", "1024"},
         {"screenheight", "768"},
-        {"bitdepth", "32"}};
+        {"bitdepth", "32"},
+        // Options > Video > Windowed (read by the hook; default on).
+        {"windowed", "true"}};
     std::vector<bool> done(wanted.size(), false);
 
     int sectionStart = -1;
@@ -1253,6 +1255,7 @@ int CommandInfo(const std::wstring& install) {
                 if (lower.rfind("screenwidth=", 0) == 0 ||
                     lower.rfind("screenheight=", 0) == 0 ||
                     lower.rfind("bitdepth=", 0) == 0 ||
+                    lower.rfind("windowed=", 0) == 0 ||
                     lower.rfind("videodriverindex=", 0) == 0) {
                     Print(L"  %hs\n", line.c_str());
                 }
@@ -1308,9 +1311,128 @@ std::wstring NormalizePath(const std::wstring& path) {
     return result;
 }
 
+// ---------------------------------------------------------------------------
+// Double-click mode. Explorer starts the patcher with no arguments in a
+// console of its own that closes as soon as the process exits, so: find the
+// game folder automatically (or ask for it), offer install or uninstall, and
+// wait for Enter before closing.
+// ---------------------------------------------------------------------------
+
+bool OwnsConsole() {
+    DWORD processes[4] = {};
+    return GetConsoleProcessList(processes, 4) <= 1;
+}
+
+void WaitForEnter() {
+    Print(L"\nPress Enter to close...");
+    wchar_t buffer[16] = {};
+    fgetws(buffer, 16, stdin);
+}
+
+bool IsGameDir(const std::wstring& dir) {
+    return !dir.empty() && FileExists(Join(dir, L"MW4Mercs.exe"));
+}
+
+std::wstring ExeDir() {
+    wchar_t buffer[MAX_PATH] = {};
+    DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        return std::wstring();
+    }
+    std::wstring path = buffer;
+    size_t slash = path.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
+}
+
+std::wstring FindGameDir() {
+    const std::wstring exe = ExeDir();
+    const std::wstring folder = L"Mechwarrior Mercenaries - Mektek Mekpak";
+    std::vector<std::wstring> candidates = {exe, DefaultInstall()};
+    // Repository layout: dist\mw4patch.exe next to MekTek\<game folder>.
+    if (!exe.empty()) {
+        candidates.push_back(Join(Join(Join(exe, L".."), L"MekTek"), folder));
+    }
+    wchar_t programs[MAX_PATH] = {};
+    if (GetEnvironmentVariableW(L"ProgramFiles(x86)", programs, MAX_PATH)) {
+        candidates.push_back(Join(Join(programs, L"MekTek.net"), folder));
+    }
+    if (GetEnvironmentVariableW(L"ProgramFiles", programs, MAX_PATH)) {
+        candidates.push_back(Join(Join(programs, L"MekTek.net"), folder));
+    }
+    for (const std::wstring& candidate : candidates) {
+        if (IsGameDir(candidate)) {
+            return NormalizePath(candidate);
+        }
+    }
+    return std::wstring();
+}
+
+std::wstring AskGameDir() {
+    for (;;) {
+        Print(L"Could not find MW4Mercs.exe automatically.\n");
+        Print(L"Drag the game folder (or MW4Mercs.exe) into this window and press Enter,\n");
+        Print(L"or press Enter on an empty line to quit:\n> ");
+        wchar_t buffer[MAX_PATH * 2] = {};
+        if (!fgetws(buffer, MAX_PATH * 2, stdin)) {
+            return std::wstring();
+        }
+        std::wstring path = buffer;
+        while (!path.empty() && (path.back() == L'\n' || path.back() == L'\r' ||
+                                 path.back() == L' ' || path.back() == L'"')) {
+            path.pop_back();
+        }
+        while (!path.empty() && (path.front() == L' ' || path.front() == L'"')) {
+            path.erase(0, 1);
+        }
+        if (path.empty()) {
+            return std::wstring();
+        }
+        const std::wstring exe_name = L"mw4mercs.exe";
+        if (path.size() >= exe_name.size() &&
+            _wcsicmp(path.c_str() + path.size() - exe_name.size(), exe_name.c_str()) == 0) {
+            size_t slash = path.find_last_of(L"\\/");
+            path = slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
+        }
+        if (IsGameDir(path)) {
+            return NormalizePath(path);
+        }
+        Print(L"\nMW4Mercs.exe is not in: %ls\n\n", path.c_str());
+    }
+}
+
+int RunInteractive() {
+    Print(L"mw4patch %ls - MechWarrior 4: Mercenaries 3.1c compatibility patch\n\n",
+          kToolVersion);
+    std::wstring install = FindGameDir();
+    if (install.empty()) {
+        install = AskGameDir();
+        if (install.empty()) {
+            Print(L"Nothing done.\n");
+            return 3;
+        }
+    }
+    if (FileExists(Join(install, kRecordName))) {
+        Print(L"The patch is already installed in:\n  %ls\n\n", install.c_str());
+        return CommandUninstall(install, false);
+    }
+    return CommandInstall(install, false);
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 1) {
+        SetConsoleOutputCP(CP_UTF8);
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const bool owns_console = OwnsConsole();
+        int result = RunInteractive();
+        CoUninitialize();
+        if (owns_console) {
+            WaitForEnter();
+        }
+        return result;
+    }
+
     SetConsoleOutputCP(CP_UTF8);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 

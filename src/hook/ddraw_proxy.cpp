@@ -1,16 +1,25 @@
-// ddraw.dll proxy: scale the fixed 800x600 frontend into a larger window.
+// ddraw.dll proxy: scale the 800x600 shell to the selected resolution.
 //
-// MW4 Mercenaries renders the in-mission scene at the configured resolution,
-// but the 2002 shell (main menu, MechLab, roster, ...) is laid out for
-// 800x600 and draws itself into the top-left of the render surface. The rest
-// of the surface stays black, so a 1024x768 window shows an 800x600 picture
-// with black bands on the right and bottom.
+// The display controller (dinput proxy, display.cpp) runs the frontend at the
+// selected resolution, but the 2002 shell (main menu, MechLab, options, the
+// in-mission options overlay, ...) is laid out for 800x600 and draws into the
+// top-left of the render surface. This proxy patches the real DirectDraw
+// surface vtable and scales that 800x600 area into the largest centered 4:3
+// viewport of the window (black bars for other aspect ratios, so the original
+// 4:3 presentation is kept):
 //
-// The shell presents through IDirectDrawSurface7::Blt. This proxy patches the
-// real DirectDraw surface vtable and, when the source is a 1024x768 surface
-// whose 800x600 content is surrounded by the shell's black border, replaces
-// the 1:1 Blt with a GDI StretchBlt of the 800x600 area. In-mission frames
-// fill the surface, fail the border check, and pass through unchanged.
+//   - windowed: IDirectDrawSurface7::Blt onto the primary is replaced by a
+//     GDI StretchBlt into the client area,
+//   - fullscreen: IDirectDrawSurface7::Flip scales the back buffer in place,
+//     then restores the next back buffer to the unscaled shell image.
+//
+// Whether a frame is a shell frame comes from the dinput proxy
+// (Mw4ShellMode); without it, a black border outside 800x600 decides.
+// Mission frames pass through unchanged. The viewport is exported
+// (Mw4FrontendViewport) so the cursor can be mapped to match.
+//
+// Development only ([debug] automation=1): mw4hook-shot.req captures the
+// presented frame to a BMP.
 //
 // This is a runtime hook only. The game executable on disk is not modified.
 #include <windows.h>
@@ -26,6 +35,7 @@ namespace {
 HMODULE g_real_ddraw = nullptr;
 HANDLE g_log = INVALID_HANDLE_VALUE;
 bool g_stretch_enabled = true;
+bool g_capture_enabled = false;
 
 void Log(const char* fmt, ...) {
     if (g_log == INVALID_HANDLE_VALUE) {
@@ -57,6 +67,8 @@ void LoadConfig() {
     wcscat_s(path, MAX_PATH, L"mw4hook.ini");
     g_stretch_enabled =
         GetPrivateProfileIntW(L"frontend", L"stretch", 1, path) != 0;
+    g_capture_enabled =
+        GetPrivateProfileIntW(L"debug", L"automation", 0, path) != 0;
     if (GetPrivateProfileIntW(L"log", L"enabled", 1, path) == 0) {
         return;
     }
@@ -121,6 +133,86 @@ int g_surface_vtable_count = 0;
 HRESULT WINAPI Hook_Blt(IDirectDrawSurface7* self, LPRECT dest_rect,
                         IDirectDrawSurface7* src, LPRECT src_rect, DWORD flags,
                         LPDDBLTFX fx);
+HRESULT WINAPI Hook_BltInner(IDirectDrawSurface7* self, LPRECT dest_rect,
+                             IDirectDrawSurface7* src, LPRECT src_rect, DWORD flags,
+                             LPDDBLTFX fx);
+using Flip_t = HRESULT(WINAPI*)(IDirectDrawSurface7*, IDirectDrawSurface7*, DWORD);
+Flip_t g_original_flip = nullptr;
+HRESULT WINAPI Hook_Flip(IDirectDrawSurface7* self, IDirectDrawSurface7* target, DWORD flags);
+bool g_last_blt_stretched = false;
+RECT g_last_stretch_src = {};
+RECT g_last_stretch_view = {};
+
+constexpr int kShellWidth = 800;
+constexpr int kShellHeight = 600;
+
+// Largest 4:3 rectangle centered in width x height (the whole area when the
+// aspect already matches within a pixel or two).
+RECT FitShell(int width, int height) {
+    int view_w = width;
+    int view_h = height;
+    if (static_cast<long long>(width) * 3 > static_cast<long long>(height) * 4) {
+        view_w = MulDiv(height, 4, 3);
+    } else {
+        view_h = MulDiv(width, 3, 4);
+    }
+    if (width - view_w <= 2) {
+        view_w = width;
+    }
+    if (height - view_h <= 2) {
+        view_h = height;
+    }
+    const int x = (width - view_w) / 2;
+    const int y = (height - view_h) / 2;
+    return {x, y, x + view_w, y + view_h};
+}
+
+// The dinput proxy knows whether the game is showing its 800x600 shell (it
+// sees every gos_SetScreenMode request). 1 = shell, 0 = mission, -1 = unknown
+// (then the black-border heuristic decides).
+int ShellModeFromHook() {
+    using ShellMode_t = int(WINAPI*)();
+    static ShellMode_t fn = nullptr;
+    static bool searched = false;
+    if (!searched) {
+        wchar_t path[MAX_PATH];
+        DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+        wchar_t* slash = len ? wcsrchr(path, L'\\') : nullptr;
+        if (slash) {
+            wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"dinput.dll");
+            HMODULE hook = GetModuleHandleW(path);
+            if (hook) {
+                searched = true;
+                fn = reinterpret_cast<ShellMode_t>(GetProcAddress(hook, "Mw4ShellMode"));
+            }
+        }
+    }
+    return fn ? fn() : -1;
+}
+
+bool HasBlackFrontendBorder(HDC dc, int width, int height);
+
+bool IsShellFrame(HDC dc, int width, int height) {
+    const int mode = ShellModeFromHook();
+    if (mode >= 0) {
+        return mode == 1;
+    }
+    return HasBlackFrontendBorder(dc, width, height);
+}
+
+// Shared with the dinput proxy (cursor mapping) through Mw4FrontendViewport.
+CRITICAL_SECTION g_view_lock;
+RECT g_view = {};
+SIZE g_view_client = {};
+DWORD g_view_time = 0;
+
+void PublishFrontendView(const RECT& view, int width, int height) {
+    EnterCriticalSection(&g_view_lock);
+    g_view = view;
+    g_view_client = {width, height};
+    g_view_time = GetTickCount();
+    LeaveCriticalSection(&g_view_lock);
+}
 HRESULT WINAPI Hook_SurfaceQueryInterface(void* self, REFIID iid, void** out);
 HRESULT WINAPI Hook_GetAttachedSurface(IDirectDrawSurface7* self,
                                        DDSCAPS2* caps,
@@ -132,7 +224,7 @@ HRESULT WINAPI Hook_GetAttachedSurface(IDirectDrawSurface7* self,
 // the area outside 800x600 is mostly black rather than exactly black. A false
 // negative only leaves the previous 1:1 behaviour; a false positive would
 // crop a mission frame.
-bool HasBlackFrontendBorder(HDC dc) {
+bool HasBlackFrontendBorder(HDC dc, int width, int height) {
     int sampled = 0;
     int lit = 0;
     auto sample = [&](int x, int y) {
@@ -147,14 +239,14 @@ bool HasBlackFrontendBorder(HDC dc) {
         return true;
     };
     for (int y = 10; y < 600; y += 24) {
-        for (int x = 810; x < 1024; x += 32) {
+        for (int x = 810; x < width; x += 32) {
             if (!sample(x, y)) {
                 return false;
             }
         }
     }
-    for (int y = 610; y < 768; y += 24) {
-        for (int x = 10; x < 1024; x += 32) {
+    for (int y = 610; y < height; y += 24) {
+        for (int x = 10; x < width; x += 32) {
             if (!sample(x, y)) {
                 return false;
             }
@@ -190,6 +282,9 @@ void PatchSurfaceVtable(IDirectDrawSurface7* surface) {
     if (!g_original_surface_qi) {
         g_original_surface_qi = reinterpret_cast<QueryInterface_t>(original[0]);
     }
+    if (!g_original_flip) {
+        g_original_flip = reinterpret_cast<Flip_t>(original[11]);
+    }
     if (!g_original_get_attached) {
         g_original_get_attached =
             reinterpret_cast<GetAttachedSurface_t>(original[12]);
@@ -199,6 +294,7 @@ void PatchSurfaceVtable(IDirectDrawSurface7* surface) {
     memcpy(patched, original, sizeof(patched));
     patched[0] = reinterpret_cast<void*>(&Hook_SurfaceQueryInterface);
     patched[5] = reinterpret_cast<void*>(&Hook_Blt);
+    patched[11] = reinterpret_cast<void*>(&Hook_Flip);
     patched[12] = reinterpret_cast<void*>(&Hook_GetAttachedSurface);
 
     DWORD old_protect = 0;
@@ -228,12 +324,192 @@ HRESULT WINAPI Hook_GetAttachedSurface(IDirectDrawSurface7* self,
     return result;
 }
 
+// ---------------------------------------------------------------------------
+// Development-only frame capture. The test automation writes the output file
+// name into mw4hook-shot.req; the next presented frame is saved as a BMP of
+// exactly what reaches the window (after the frontend scaler). Polled at most
+// every 200 ms, so it costs nothing measurable when unused.
+// ---------------------------------------------------------------------------
+
+bool GameDirPath(const wchar_t* name, wchar_t* out, size_t cch) {
+    DWORD len = GetModuleFileNameW(nullptr, out, static_cast<DWORD>(cch));
+    wchar_t* slash = len ? wcsrchr(out, L'\\') : nullptr;
+    if (!slash) {
+        return false;
+    }
+    slash[1] = L'\0';
+    return wcscat_s(out, cch, name) == 0;
+}
+
+bool TakeShotRequest(wchar_t* out_path, size_t cch) {
+    static DWORD last_check = 0;
+    DWORD now = GetTickCount();
+    if (now - last_check < 200) {
+        return false;
+    }
+    last_check = now;
+    wchar_t req[MAX_PATH];
+    if (!GameDirPath(L"mw4hook-shot.req", req, MAX_PATH)) {
+        return false;
+    }
+    HANDLE file = CreateFileW(req, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    char name[MAX_PATH] = {};
+    DWORD read = 0;
+    ReadFile(file, name, MAX_PATH - 1, &read, nullptr);
+    CloseHandle(file);
+    DeleteFileW(req);
+    name[read] = '\0';
+    for (DWORD i = 0; i < read; ++i) {
+        if (name[i] == '\r' || name[i] == '\n') {
+            name[i] = '\0';
+        }
+    }
+    wchar_t wide[MAX_PATH];
+    MultiByteToWideChar(CP_ACP, 0, name, -1, wide, MAX_PATH);
+    if (wcschr(wide, L'\\') || wcschr(wide, L'/')) {
+        wcscpy_s(out_path, cch, wide);
+        return true;
+    }
+    return GameDirPath(wide, out_path, cch);
+}
+
+// Writes what the window shows: a client-sized black canvas with |src_rect|
+// of the presented surface drawn at |dest| (client coordinates). Anything the
+// game does not cover stays black, exactly as on screen.
+void WriteShot(const wchar_t* path, HDC src_dc, int width, int height,
+               const RECT& src_rect, const RECT& dest) {
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = height;  // bottom-up, as BMP expects
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 24;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC mem = CreateCompatibleDC(src_dc);
+    HBITMAP dib = CreateDIBSection(mem, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!dib) {
+        DeleteDC(mem);
+        return;
+    }
+    HGDIOBJ old = SelectObject(mem, dib);
+    RECT all = {0, 0, width, height};
+    FillRect(mem, &all, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    SetStretchBltMode(mem, HALFTONE);
+    StretchBlt(mem, dest.left, dest.top, dest.right - dest.left, dest.bottom - dest.top,
+               src_dc, src_rect.left, src_rect.top,
+               src_rect.right - src_rect.left, src_rect.bottom - src_rect.top, SRCCOPY);
+    GdiFlush();
+    const DWORD stride = ((width * 3 + 3) & ~3u);
+    const DWORD image = stride * height;
+    BITMAPFILEHEADER header{};
+    header.bfType = 0x4D42;
+    header.bfOffBits = sizeof(header) + sizeof(info.bmiHeader);
+    header.bfSize = header.bfOffBits + image;
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(file, &header, sizeof(header), &written, nullptr);
+        WriteFile(file, &info.bmiHeader, sizeof(info.bmiHeader), &written, nullptr);
+        WriteFile(file, bits, image, &written, nullptr);
+        CloseHandle(file);
+        Log("shot: %ls (%dx%d)\n", path, width, height);
+    }
+    SelectObject(mem, old);
+    DeleteObject(dib);
+    DeleteDC(mem);
+}
+
+void MaybeCaptureFrame(IDirectDrawSurface7* self, IDirectDrawSurface7* src,
+                       LPRECT src_rect, LPRECT dest_rect,
+                       const RECT* stretched_from) {
+    static wchar_t pending[MAX_PATH] = {};
+    if (!src || !dest_rect) {
+        return;
+    }
+    if (!pending[0] && !TakeShotRequest(pending, MAX_PATH)) {
+        return;
+    }
+    // Only the present (a blit onto the primary surface) is the frame.
+    DDSCAPS2 caps{};
+    if (FAILED(self->GetCaps(&caps)) || !(caps.dwCaps & DDSCAPS_PRIMARYSURFACE)) {
+        return;
+    }
+    wchar_t path[MAX_PATH];
+    wcscpy_s(path, pending);
+    pending[0] = L'\0';
+    HDC dc = nullptr;
+    if (FAILED(src->GetDC(&dc))) {
+        Log("shot: GetDC failed\n");
+        return;
+    }
+    RECT from{};
+    if (stretched_from) {
+        from = *stretched_from;
+    } else if (src_rect) {
+        from = *src_rect;
+    } else {
+        DDSURFACEDESC2 desc{};
+        desc.dwSize = sizeof(desc);
+        src->GetSurfaceDesc(&desc);
+        from = {0, 0, static_cast<LONG>(desc.dwWidth), static_cast<LONG>(desc.dwHeight)};
+    }
+    // Map the present rectangle (screen coordinates) into the window's client
+    // area via the primary surface's clipper window.
+    int width = dest_rect->right - dest_rect->left;
+    int height = dest_rect->bottom - dest_rect->top;
+    RECT dest = {0, 0, width, height};
+    IDirectDrawClipper* clipper = nullptr;
+    HWND hwnd = nullptr;
+    if (SUCCEEDED(self->GetClipper(&clipper)) && clipper) {
+        clipper->GetHWnd(&hwnd);
+        clipper->Release();
+    }
+    if (hwnd) {
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        POINT origin = {0, 0};
+        ClientToScreen(hwnd, &origin);
+        width = client.right;
+        height = client.bottom;
+        dest = {dest_rect->left - origin.x, dest_rect->top - origin.y,
+                dest_rect->right - origin.x, dest_rect->bottom - origin.y};
+    }
+    if (stretched_from) {
+        // The scaler drew the shell into a 4:3 viewport inside the present.
+        dest = {dest.left + g_last_stretch_view.left, dest.top + g_last_stretch_view.top,
+                dest.left + g_last_stretch_view.right, dest.top + g_last_stretch_view.bottom};
+    }
+    Log("shot: client %dx%d, present %ld,%ld-%ld,%ld\n", width, height, dest.left,
+        dest.top, dest.right, dest.bottom);
+    WriteShot(path, dc, width, height, from, dest);
+    src->ReleaseDC(dc);
+}
+
 HRESULT WINAPI Hook_Blt(IDirectDrawSurface7* self, LPRECT dest_rect,
                         IDirectDrawSurface7* src, LPRECT src_rect, DWORD flags,
                         LPDDBLTFX fx) {
+    HRESULT result = Hook_BltInner(self, dest_rect, src, src_rect, flags, fx);
+    if (g_capture_enabled && src && dest_rect) {
+        MaybeCaptureFrame(self, src, src_rect, dest_rect,
+                          g_last_blt_stretched ? &g_last_stretch_src : nullptr);
+    }
+    return result;
+}
+
+HRESULT WINAPI Hook_BltInner(IDirectDrawSurface7* self, LPRECT dest_rect,
+                             IDirectDrawSurface7* src, LPRECT src_rect, DWORD flags,
+                             LPDDBLTFX fx) {
+    g_last_blt_stretched = false;
     if (!g_stretch_enabled || !src || !dest_rect) {
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
+
 
     DDSURFACEDESC2 desc{};
     desc.dwSize = sizeof(desc);
@@ -241,36 +517,28 @@ HRESULT WINAPI Hook_Blt(IDirectDrawSurface7* self, LPRECT dest_rect,
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
 
+    // The shell renders 800x600 into the top-left of a larger render surface
+    // (the display controller runs the frontend at the selected resolution).
+    const int surface_w = static_cast<int>(desc.dwWidth);
+    const int surface_h = static_cast<int>(desc.dwHeight);
     const int dest_w = dest_rect->right - dest_rect->left;
     const int dest_h = dest_rect->bottom - dest_rect->top;
-    int content_w = 0;
-    int content_h = 0;
-    if (desc.dwWidth == 800 && desc.dwHeight == 600) {
-        content_w = 800;
-        content_h = 600;
-    } else if (desc.dwWidth == 1024 && desc.dwHeight == 768) {
-        content_w = 800;
-        content_h = 600;
-    }
-
-    if (!content_w || dest_w <= content_w || dest_h <= content_h) {
+    if (surface_w < kShellWidth || surface_h < kShellHeight ||
+        (surface_w == kShellWidth && surface_h == kShellHeight) ||
+        dest_w <= kShellWidth || dest_h <= kShellHeight) {
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
 
     HDC src_dc = nullptr;
-    HDC dest_dc = nullptr;
-    HRESULT src_result = src->GetDC(&src_dc);
-    if (FAILED(src_result)) {
+    if (FAILED(src->GetDC(&src_dc))) {
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
-
-    const bool is_frontend =
-        desc.dwWidth != 1024 || HasBlackFrontendBorder(src_dc);
-    if (!is_frontend) {
+    if (!IsShellFrame(src_dc, surface_w, surface_h)) {
         src->ReleaseDC(src_dc);
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
 
+    HDC dest_dc = nullptr;
     HRESULT dest_result = self->GetDC(&dest_dc);
     if (FAILED(dest_result)) {
         src->ReleaseDC(src_dc);
@@ -278,8 +546,28 @@ HRESULT WINAPI Hook_Blt(IDirectDrawSurface7* self, LPRECT dest_rect,
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
 
-    BOOL ok = StretchBlt(dest_dc, dest_rect->left, dest_rect->top, dest_w,
-                         dest_h, src_dc, 0, 0, content_w, content_h, SRCCOPY);
+    // Keep the original 4:3 presentation: fit 800x600 into the destination
+    // and fill any side/top bars with black.
+    RECT view = FitShell(dest_w, dest_h);
+    RECT bars[2] = {};
+    if (view.left > 0) {
+        bars[0] = {0, 0, view.left, dest_h};
+        bars[1] = {view.right, 0, dest_w, dest_h};
+    } else if (view.top > 0) {
+        bars[0] = {0, 0, dest_w, view.top};
+        bars[1] = {0, view.bottom, dest_w, dest_h};
+    }
+    for (RECT bar : bars) {
+        if (bar.right > bar.left && bar.bottom > bar.top) {
+            OffsetRect(&bar, dest_rect->left, dest_rect->top);
+            FillRect(dest_dc, &bar, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        }
+    }
+    SetStretchBltMode(dest_dc, HALFTONE);
+    SetBrushOrgEx(dest_dc, 0, 0, nullptr);
+    BOOL ok = StretchBlt(dest_dc, dest_rect->left + view.left, dest_rect->top + view.top,
+                         view.right - view.left, view.bottom - view.top, src_dc, 0, 0,
+                         kShellWidth, kShellHeight, SRCCOPY);
     self->ReleaseDC(dest_dc);
     src->ReleaseDC(src_dc);
     if (!ok) {
@@ -287,11 +575,16 @@ HRESULT WINAPI Hook_Blt(IDirectDrawSurface7* self, LPRECT dest_rect,
         return g_original_blt(self, dest_rect, src, src_rect, flags, fx);
     }
 
-    static bool reported = false;
-    if (!reported) {
-        reported = true;
-        Log("frontend stretch: %dx%d -> %dx%d\n", content_w, content_h,
-            dest_w, dest_h);
+    g_last_blt_stretched = true;
+    g_last_stretch_src = {0, 0, kShellWidth, kShellHeight};
+    g_last_stretch_view = view;
+    PublishFrontendView(view, dest_w, dest_h);
+    static RECT reported = {};
+    if (!EqualRect(&reported, &view)) {
+        reported = view;
+        Log("frontend stretch: 800x600 -> %ldx%ld at %ld,%ld in %dx%d\n",
+            view.right - view.left, view.bottom - view.top, view.left, view.top, dest_w,
+            dest_h);
     }
     return DD_OK;
 }
@@ -393,6 +686,151 @@ MW4_DDRAW_THUNK(ReleaseDDThreadLock)
 MW4_DDRAW_THUNK(SetAppCompatData)
 }  // extern "C"
 
+namespace {
+
+// Fullscreen presents with Flip: the shell has drawn 800x600 into the
+// top-left of the back buffer. Scale it in place (via a memory copy, since
+// source and destination overlap) before the flip.
+// The last unscaled shell frame. After a scaled flip the buffer that comes
+// back as the back buffer still holds the scaled image; it is restored to
+// what the shell left there (this copy, black elsewhere) so the next frame's
+// border test and any partial redraw see the original layout.
+HBITMAP g_shell_copy = nullptr;
+bool g_flip_scaled = false;
+
+bool ScaleShellInPlace(IDirectDrawSurface7* surface, int width, int height) {
+    HDC dc = nullptr;
+    if (FAILED(surface->GetDC(&dc))) {
+        return false;
+    }
+    bool done = false;
+    if (IsShellFrame(dc, width, height)) {
+        HDC mem = CreateCompatibleDC(dc);
+        if (!g_shell_copy) {
+            g_shell_copy = CreateCompatibleBitmap(dc, kShellWidth, kShellHeight);
+        }
+        HBITMAP copy = g_shell_copy;
+        if (mem && copy) {
+            HGDIOBJ old = SelectObject(mem, copy);
+            BitBlt(mem, 0, 0, kShellWidth, kShellHeight, dc, 0, 0, SRCCOPY);
+            RECT all = {0, 0, width, height};
+            FillRect(dc, &all, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+            RECT view = FitShell(width, height);
+            SetStretchBltMode(dc, HALFTONE);
+            SetBrushOrgEx(dc, 0, 0, nullptr);
+            done = StretchBlt(dc, view.left, view.top, view.right - view.left,
+                              view.bottom - view.top, mem, 0, 0, kShellWidth,
+                              kShellHeight, SRCCOPY) != FALSE;
+            SelectObject(mem, old);
+            if (done) {
+                PublishFrontendView(view, width, height);
+                static RECT reported = {};
+                if (!EqualRect(&reported, &view)) {
+                    reported = view;
+                    Log("frontend stretch (flip): 800x600 -> %ldx%ld at %ld,%ld in %dx%d\n",
+                        view.right - view.left, view.bottom - view.top, view.left,
+                        view.top, width, height);
+                }
+            }
+        }
+        if (mem) {
+            DeleteDC(mem);
+        }
+    }
+    surface->ReleaseDC(dc);
+    return done;
+}
+
+void RestoreShellBackBuffer(IDirectDrawSurface7* surface, int width, int height) {
+    HDC dc = nullptr;
+    if (!g_shell_copy || FAILED(surface->GetDC(&dc))) {
+        return;
+    }
+    RECT all = {0, 0, width, height};
+    FillRect(dc, &all, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    HDC mem = CreateCompatibleDC(dc);
+    if (mem) {
+        HGDIOBJ old = SelectObject(mem, g_shell_copy);
+        BitBlt(dc, 0, 0, kShellWidth, kShellHeight, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        DeleteDC(mem);
+    }
+    surface->ReleaseDC(dc);
+}
+
+HRESULT WINAPI Hook_Flip(IDirectDrawSurface7* self, IDirectDrawSurface7* target,
+                         DWORD flags) {
+    IDirectDrawSurface7* back = target;
+    bool release = false;
+    int back_w = 0;
+    int back_h = 0;
+    g_flip_scaled = false;
+    if (!back) {
+        DDSCAPS2 caps{};
+        caps.dwCaps = DDSCAPS_BACKBUFFER;
+        if (SUCCEEDED(self->GetAttachedSurface(&caps, &back))) {
+            release = true;
+        } else {
+            back = nullptr;
+        }
+    }
+    if (back) {
+        DDSURFACEDESC2 desc{};
+        desc.dwSize = sizeof(desc);
+        if (SUCCEEDED(back->GetSurfaceDesc(&desc))) {
+            const int width = static_cast<int>(desc.dwWidth);
+            const int height = static_cast<int>(desc.dwHeight);
+            if (g_stretch_enabled &&
+                ((width > kShellWidth && height >= kShellHeight) ||
+                 (width >= kShellWidth && height > kShellHeight))) {
+                g_flip_scaled = ScaleShellInPlace(back, width, height);
+                back_w = width;
+                back_h = height;
+            }
+            if (g_capture_enabled) {
+                wchar_t path[MAX_PATH];
+                if (TakeShotRequest(path, MAX_PATH)) {
+                    HDC dc = nullptr;
+                    if (SUCCEEDED(back->GetDC(&dc))) {
+                        RECT all = {0, 0, width, height};
+                        WriteShot(path, dc, width, height, all, all);
+                        back->ReleaseDC(dc);
+                    }
+                }
+            }
+        }
+        if (release) {
+            back->Release();
+        }
+    }
+    HRESULT result = g_original_flip(self, target, flags);
+    if (SUCCEEDED(result) && g_flip_scaled && !target) {
+        DDSCAPS2 caps{};
+        caps.dwCaps = DDSCAPS_BACKBUFFER;
+        IDirectDrawSurface7* next = nullptr;
+        if (SUCCEEDED(self->GetAttachedSurface(&caps, &next)) && next) {
+            RestoreShellBackBuffer(next, back_w, back_h);
+            next->Release();
+        }
+    }
+    return result;
+}
+
+}  // namespace
+// Reports where the scaled 800x600 shell was last drawn, relative to the
+// window client area. Returns FALSE when the last frames were not frontend
+// frames (in mission), so callers leave the cursor untouched.
+extern "C" BOOL WINAPI Mw4FrontendViewport(RECT* view, SIZE* client) {
+    EnterCriticalSection(&g_view_lock);
+    const bool recent = g_view_time != 0 && GetTickCount() - g_view_time < 500;
+    if (recent) {
+        *view = g_view;
+        *client = g_view_client;
+    }
+    LeaveCriticalSection(&g_view_lock);
+    return recent ? TRUE : FALSE;
+}
+
 extern "C" HRESULT WINAPI Proxy_DirectDrawCreate(GUID* guid, IDirectDraw** out,
                                                  IUnknown* outer) {
     auto fn = reinterpret_cast<DirectDrawCreate_t>(Resolve("DirectDrawCreate"));
@@ -423,6 +861,7 @@ extern "C" HRESULT WINAPI Proxy_DirectDrawCreateEx(GUID* guid, void** out,
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
+        InitializeCriticalSection(&g_view_lock);
         LoadConfig();
         Log("ddraw proxy attached\n");
         Resolve("DirectDrawCreate");
