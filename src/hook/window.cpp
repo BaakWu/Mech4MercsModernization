@@ -157,6 +157,31 @@ Layout ComputeLayout(HWND hwnd) {
     SelectedSize(&client_w, &client_h);
     layout.style = g_framed_style | WS_VISIBLE;
     SIZE outer = OuterSize(layout.style, client_w, client_h);
+    // Sizes larger than the monitor (the list goes up to 5040x1050): shrink
+    // the window to fit the work area, aspect kept. The game still renders
+    // at the selected size; the ddraw proxy scales the picture into the
+    // smaller window.
+    RECT work{};
+    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
+        work = {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    }
+    const int work_w = work.right - work.left;
+    const int work_h = work.bottom - work.top;
+    if (client_w > 0 && client_h > 0 && (outer.cx > work_w || outer.cy > work_h)) {
+        const int frame_w = outer.cx - client_w;
+        const int frame_h = outer.cy - client_h;
+        const int max_w = work_w - frame_w;
+        const int max_h = work_h - frame_h;
+        int fit_w = max_w;
+        int fit_h = MulDiv(max_w, client_h, client_w);
+        if (fit_h > max_h) {
+            fit_h = max_h;
+            fit_w = MulDiv(max_h, client_w, client_h);
+        }
+        client_w = fit_w;
+        client_h = fit_h;
+        outer = OuterSize(layout.style, client_w, client_h);
+    }
     POINT origin = CenteredOrigin(outer);
     if (hwnd) {
         // Keep a window the player moved where it is, unless the frame or the

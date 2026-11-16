@@ -183,6 +183,7 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
             if (cmd == kShellGetOptionValue) {
                 *value = g_windowed ? 1 : 0;
             } else {
+                Log("display: script sets Windowed = %d\n", *value);
                 SetWindowedMode(*value != 0);
             }
             return 1;
@@ -204,6 +205,7 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
             int result = g_shell_callback(a1, a2, args);
             CallOriginal(a1, a2, kShellSetOptionValue, kMwoUseExtendedVisibility, &extended);
             const int index = *value;
+            Log("display: script sets Resolution = index %d\n", index);
             if (index >= 0 && index < kResolutionCount) {
                 const int w = static_cast<int>(g_resolutions[index * 2]);
                 const int h = static_cast<int>(g_resolutions[index * 2 + 1]);

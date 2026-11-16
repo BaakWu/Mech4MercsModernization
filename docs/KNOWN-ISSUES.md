@@ -105,8 +105,10 @@ fullscreen switch. Unknown trigger; not seen since.
   it.
 - Rapid double-clicks on the Windowed checkbox are unverified.
 - The issue's 100 toggle cycles have not been run.
-- Resolution dropdown: picking an entry after scrolling the list selected
-  index 0 in automated tests; also with all display hooks disabled.
+- Resolution dropdown "selects index 0 after scrolling": not a game bug. The
+  automated test clicked without resting the pointer on the entry first, which
+  this UI requires; with a hover, scrolled entries select correctly (verified
+  2026-11-16, e.g. 1280x1024 after scrolling).
 - AntiHack and multiplayer join are untested with the detours.
 
 ## Test aids

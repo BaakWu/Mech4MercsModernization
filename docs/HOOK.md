@@ -38,6 +38,12 @@ memory after the PECompact stub has unpacked the image.
   missions.
 - Choosing a **Resolution** resizes the window immediately; the mission uses it
   from the next mission start. It is saved on **OK**, like every other option.
+  The options screen has no Cancel (OK always saves); the Video tab's
+  **Reset** button restores the resolution *and* the Windowed setting to their
+  values from when the tab was opened.
+- Sizes larger than the monitor (the 3.1c list goes up to 5040x1050): in a
+  framed window the window is shrunk to fit the work area with the aspect
+  kept; the game still renders at the chosen size and the picture is scaled.
 - **Never 16-bit:** 16-bit requests are raised to 32-bit, and the 16-bit
   fallbacks in GameOS' (now unused) fullscreen setup are raised to 32-bit.
 - DPI: the process opts out of DPI virtualization, so one game pixel is one
@@ -180,7 +186,15 @@ anchor is missing or the text would not fit, the script is left as shipped.
 
 The added lines create the checkbox and label, read the state in `GUI_INIT`,
 toggle it in `GUI_MAILBOX`, and keep it in step in `GUI_EXECUTE` (so
-Alt+Enter updates the box). They talk to the hook through the game's own
+Alt+Enter updates the box). Like the script's own `dRes`, a `dWin` variable
+records the setting when the tab opens, and the Reset button's handler sets it
+back next to `dRes`. The rewritten script uses all but 14 bytes of the buffer.
+
+The Resolution dropdown lists the 29 sizes returned by the game's
+`ShellGetSupportedResolutions` (MekTek's list), not the retail game's five.
+The list opens where it was last scrolled, each arrow click scrolls two rows,
+and like every shell button an entry only takes a click after the pointer has
+rested on it briefly (normal for this UI; automated tests must hover first). They talk to the hook through the game's own
 `ShellGetOptionValue`/`ShellSetOptionValue` with option id 200
 (`kMwoWindowed`; the game's ids are 0-34). The hook answers that id before the
 game's handler sees it.
@@ -264,6 +278,10 @@ pwsh ./tools/Send-Mw4Automation.ps1 -Install $install -ShotDir out `
 ```
 
 `smove` takes coordinates in the scaled picture (800x600 in menus).
+`click <ms>` holds the button that long (default 150; list arrows auto-repeat
+while held, `click 40` scrolls one step). `movewin x y` moves the window.
+With automation on, every shell script the game loads is also saved to
+`mw4hook-scripts\` in the game folder (as shipped, before any rewrite).
 `setwindowed 0|1` calls the same backend as the checkbox.
 `tools/Invoke-Mw4Ui.ps1` reports the window size and style in physical pixels.
 

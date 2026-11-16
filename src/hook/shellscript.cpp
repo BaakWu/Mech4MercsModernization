@@ -43,6 +43,7 @@ constexpr size_t kEntryName = 0x28;
 std::string CreateBlock() {
     return "int nWin = 1\r\n"
            "int nWinNow\r\n"
+           "int dWin\r\n"
            "object oWin = s_multistatepanetoggle\r\n"
            "oWin.location = oDRes.location.x + 175,oDRes.location.y,nZ_BUTTON\r\n"
            "oWin.file = WPATH \"checkbox_15x15_4state.tga\"\r\n"
@@ -77,6 +78,16 @@ std::string MailboxBlock() {
               "mail(nWin + 1,oWin)\r\n"
               "callback($$Shell_CallbackHandler$$,ShellSetOptionValue,%d,nWin)\r\n"
               "}\r\n",
+              kMwoWindowed);
+    return buffer;
+}
+
+// The tab's Reset button restores the values from when the tab was opened
+// (the script keeps them as dGamma, dRes, ...). dWin does the same for the
+// Windowed setting: recorded next to dRes, restored next to it.
+std::string ResetBlock() {
+    char buffer[120];
+    sprintf_s(buffer, "callback($$Shell_CallbackHandler$$,ShellSetOptionValue,%d,dWin)\r\n",
               kMwoWindowed);
     return buffer;
 }
@@ -180,6 +191,11 @@ void InjectWindowedCheckbox(char* data, size_t size) {
     size_t init = text.find("GUI_INIT");
     ok = ok && init != std::string::npos &&
          InsertBeforeLine(&text, "if (first_time)", init, InitBlock());
+    ok = ok && InsertAfterLine(&text, "dRes = nRes", "dWin = nWin\r\n");
+    ok = ok && InsertBeforeLine(&text,
+                                "callback($$Shell_CallbackHandler$$,ShellSetOptionValue,"
+                                "MWO_SCREENRESOLUTION,dRes)",
+                                0, ResetBlock());
     ok = ok && InsertBeforeLine(&text, "if (sender == oUseExtendedVisibility)", 0,
                                 MailboxBlock());
     // main's GUI_MAILBOX is the first one in the file.
@@ -205,9 +221,49 @@ void InjectWindowedCheckbox(char* data, size_t size) {
         size, size - 2 - body.size() - sizeof(kMarker) - 1);
 }
 
+// Development only ([debug] automation=1): save every shell script the game
+// loads to mw4hook-scripts\ in the game directory, as fetched (before any
+// rewrite), for reading the menus' logic.
+void DumpScript(const unsigned char* entry) {
+    const int len = entry[kEntryNameLen];
+    const char* name = reinterpret_cast<const char*>(entry + kEntryName);
+    const DWORD size = *reinterpret_cast<const DWORD*>(entry + kEntrySize);
+    const char* data = *reinterpret_cast<char* const*>(entry + kEntryData);
+    if (!data || size == 0 || size > 1024 * 1024 || len < 8 ||
+        _strnicmp(name + len - 7, ".script", 7) != 0) {
+        return;
+    }
+    char path[MAX_PATH];
+    DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
+    char* slash = n ? strrchr(path, '\\') : nullptr;
+    if (!slash) {
+        return;
+    }
+    strcpy_s(slash + 1, MAX_PATH - (slash + 1 - path), "mw4hook-scripts");
+    CreateDirectoryA(path, nullptr);
+    const char* base = name;
+    for (int i = 0; i < len; ++i) {
+        if (name[i] == '\\' || name[i] == '/') {
+            base = name + i + 1;
+        }
+    }
+    char file[MAX_PATH];
+    sprintf_s(file, "%s\\%.*s", path, static_cast<int>(name + len - base), base);
+    HANDLE h = CreateFileA(file, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(h, data, size, &written, nullptr);
+        CloseHandle(h);
+    }
+}
+
 void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive) {
     g_member_fetch(entry, edx, archive);
     __try {
+        if (GetConfig().debug_automation) {
+            DumpScript(entry);
+        }
         if (entry[kEntryNameLen] != sizeof(kTargetName) - 1 ||
             _stricmp(reinterpret_cast<char*>(entry + kEntryName), kTargetName) != 0) {
             return;

@@ -107,15 +107,21 @@ void Execute(const std::string& line) {
     } else if (_stricmp(verb, "click") == 0) {
         // The game keeps mouse buttons in its key bitmap (VK_LBUTTON), filled
         // by the window procedure; DirectInput is only used for motion.
+        // Optional argument: hold time in ms (default 150; list arrows
+        // auto-repeat while held).
+        int hold = atoi(rest);
+        if (hold <= 0) {
+            hold = 150;
+        }
         HWND hwnd = MainWindow();
         EnterCriticalSection(&g_lock);
         LPARAM where = MAKELPARAM(g_cursor.x, g_cursor.y);
         LeaveCriticalSection(&g_lock);
-        InterlockedExchange(&g_button_until, static_cast<LONG>(GetTickCount() + 150));
+        InterlockedExchange(&g_button_until, static_cast<LONG>(GetTickCount() + hold));
         if (hwnd) {
             PostMessageA(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, where);
         }
-        Sleep(150);
+        Sleep(static_cast<DWORD>(hold));
         if (hwnd) {
             PostMessageA(hwnd, WM_LBUTTONUP, 0, where);
         }
