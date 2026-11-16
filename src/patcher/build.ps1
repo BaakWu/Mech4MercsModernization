@@ -107,6 +107,32 @@ if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
     throw "Build did not produce $exe"
 }
 
+# GUI installer: same source, MW4PATCH_GUI, Windows subsystem, visual styles.
+$setup = Join-Path $OutDir 'MW4Mercs-WindowedPatch-Setup.exe'
+$guiObj = Join-Path $OutDir 'patcher\obj-gui'
+New-Item -ItemType Directory -Path $guiObj -Force | Out-Null
+$guiCommand = @(
+    'cl /nologo /MT /W4 /WX- /EHsc /utf-8 /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /DMW4PATCH_GUI'
+    $optFlags
+    "/I `"$patcherSrc`""
+    "/Fo:`"$guiObj\\`""
+    "/Fd:`"$guiObj\setup.pdb`""
+    "`"$patcherSrc\main.cpp`""
+    "`"$resFile`""
+    "/Fe:`"$setup`""
+    '/link advapi32.lib ole32.lib uuid.lib shell32.lib user32.lib gdi32.lib comctl32.lib /SUBSYSTEM:WINDOWS'
+    "/MANIFEST:EMBED /MANIFESTUAC:`"level='asInvoker' uiAccess='false'`""
+    "`"/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'`""
+) -join ' '
+$output = cmd /c "call `"$vcvars`" x86 >nul && $guiCommand" 2>&1
+$output | ForEach-Object { Write-Output $_ }
+if ($LASTEXITCODE -ne 0) {
+    throw "Setup build failed with exit code $LASTEXITCODE."
+}
+
+Write-Output ''
+Write-Output "Built: $setup"
+Write-Output ("SHA-256: " + (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant())
 Write-Output ''
 Write-Output "Built: $exe"
 Write-Output ("Size : " + (Get-Item -LiteralPath $exe).Length + " bytes")

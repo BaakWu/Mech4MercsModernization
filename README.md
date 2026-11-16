@@ -7,8 +7,8 @@ The goal is to make the original game launch and play correctly on modern
 Windows without replacing the engine, breaking AntiHack, or shipping game
 files.
 
-> **Status: pre-release.** The windowed-mode patch is feature complete and
-> builds as a zip (see Installing); there is no public download yet.
+> **Status:** the windowed-mode patch is feature complete. Releases are on the
+> GitHub Releases page; from 1.1.0 they ship as a GUI installer.
 
 ## Why this exists
 
@@ -25,12 +25,14 @@ The first release is a **windowed-mode patch**:
 - correct mouse and display behavior with Windows display scaling above 100%
 - keep the game’s **AntiHack active and untouched**
 
-Optional, off by default: **MechWarrior 5-style controls** (`[controls] mw5=1`
-in `mw4hook.ini`): faster W/S throttle and an MW5-style key layout (X full
-stop, P power, numpad presets, mouse aims the torso, …) loaded with the
-DEFAULT button in Options > Controls; and **Throttle Decay**, an On/Off
-switch on Options > Game (throttle eases back to zero when W/S is released).
-Details in `docs/HOOK.md`.
+Also included: **Throttle Decay**, an On/Off switch on Options > Game (off by
+default; the throttle eases back to zero when W/S is released).
+
+Optional, chosen in the installer: **MechWarrior 5-style controls**: faster
+W/S throttle and an MW5-style key layout (X full stop, P power, numpad
+presets, mouse aims the torso, …) loaded with the DEFAULT button in
+Options > Controls. Leave it unticked to keep MW4's controls. Details in
+`docs/HOOK.md`.
 
 Making windowed mode usable also fixed four bugs that are in the stock game on
 current Windows: low mission frame rate, garbled audio, see-through terrain,
@@ -56,25 +58,29 @@ picture scaled to fit. That is not a visual overhaul.
 
 ## Installing
 
-The release is a zip, `MW4Mercs-WindowedPatch-<version>.zip`:
+Run `MW4Mercs-WindowedPatch-Setup-<version>.exe`:
 
-1. Copy `dinput.dll`, `ddraw.dll` and `mw4hook.ini` into the game folder (the
-   one with `MW4Mercs.exe`).
-2. Start the game as usual. It opens in a window; set the size and the
-   Windowed option in Options > Video.
+1. It finds the game folder (or use Browse) and checks that it is
+   MechWarrior 4: Mercenaries 3.1c.
+2. Windowed mode and the display fixes are always installed, and so is the
+   Throttle Decay setting (off until you switch it on in the game). Tick
+   **MechWarrior 5-style controls** if you want them.
+3. Click **Install**, then start the game as usual. It opens in a window; set
+   the size and the Windowed option in Options > Video.
 
-To uninstall, delete those three files (and any `mw4hook-*.log`). The zip's
-`WindowedPatch-README.txt` says the same for players.
+Run the installer again to switch the MW5 controls on or off (**Update**) or
+to **Uninstall**. If the game is under Program Files, the installer offers to
+restart itself as administrator.
 
 The fix layer is loaded at runtime rather than rewriting `MW4Mercs.exe`. That
 keeps the patch reversible and avoids touching the game’s AntiHack or the code
-regions used by the multiplayer integrity check. No game file is changed: with
-the files removed, the folder matches the original 3.1c manifest again.
+regions used by the multiplayer integrity check. No game file is changed:
+after uninstalling, the folder matches the original 3.1c manifest again.
 
-Build the zip with:
+Build the installer with:
 
 ```powershell
-pwsh ./tools/New-Mw4Release.ps1     # dist\MW4Mercs-WindowedPatch-<date>-<commit>.zip
+pwsh ./tools/New-Mw4Release.ps1     # dist\MW4Mercs-WindowedPatch-Setup-<version>.exe
 ```
 
 ## Supported game
@@ -148,10 +154,11 @@ proxy. Together they:
 Build, test and technical details are in `docs/HOOK.md`; open problems are in
 `docs/KNOWN-ISSUES.md`.
 
-### Development installer (not the release)
+### Command-line installer (testing)
 
-`src/patcher/` builds `mw4patch.exe`, a development installer used for
-testing. It embeds the hook files, verifies the supported 3.1c build against
+`src/patcher/` also builds `mw4patch.exe`, the command-line version of the
+installer (same code), used for testing; `--mw5` / `--no-mw5` choose the
+controls. It embeds the hook files, verifies the supported 3.1c build against
 the core manifest, backs up `options.ini`, installs the hook, creates a
 windowed shortcut, and writes an install record with uninstall support.
 
@@ -206,8 +213,7 @@ hook does.
 | `docs/ROADMAP.md` | Milestones and non-goals |
 | `manifests/` | Core and full SHA-256 baselines |
 | `src/hook/` | Native `dinput.dll` proxy and Win32/display hooks |
-| `src/patcher/` | Development installer (`mw4patch.exe`); the release is a zip |
-| `templates/release-README.txt` | Player instructions packed into the release zip |
+| `src/patcher/` | Installer: GUI release build and command-line `mw4patch.exe` |
 | `templates/` | Known-good configuration template |
 | `tools/` | Inspect, verify, repair, window-test, and manifest scripts |
 
@@ -247,7 +253,7 @@ See `docs/ROADMAP.md` for the milestone plan. The short version:
 
 1. Verify the baseline and fix configuration. **Done.**
 2. Implement windowed mode and the Windowed checkbox. **Done.**
-3. Release zip build (`tools/New-Mw4Release.ps1`). **Done.**
+3. Release build: GUI installer (`tools/New-Mw4Release.ps1`). **Done.**
 4. Publish the first release.
 5. Add optional WASD throttle-decay controls.
 

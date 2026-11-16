@@ -1,9 +1,37 @@
-# mw4patch.exe (development patcher)
+# Installer (GUI release and mw4patch.exe)
 
-Status: **development tool, not the release.** The public release is a zip
-built by `tools/New-Mw4Release.ps1` (players copy the files into the game
-folder and delete them to uninstall). `mw4patch.exe` stays useful for testing:
-it verifies the install by hash and keeps an install record.
+`src/patcher/main.cpp` builds two programs from the same code:
+
+- **`MW4Mercs-WindowedPatch-Setup.exe`** (`MW4PATCH_GUI`, Windows
+  subsystem) is the **release**. `tools/New-Mw4Release.ps1` copies it to
+  `dist\MW4Mercs-WindowedPatch-Setup-<version>.exe`.
+- **`mw4patch.exe`** (console) is the command-line build, for testing.
+
+## GUI installer
+
+One window:
+
+- **Game folder**, auto-detected (same search as below) or chosen with
+  **Browse**; a path to `MW4Mercs.exe` itself is accepted. The status line
+  says whether the folder holds the supported 3.1c exe and whether the patch
+  is already installed.
+- **Components:**
+  - *Windowed mode and display fixes* (required, always ticked)
+  - *Throttle Decay setting* (always included; it is an Options > Game
+    switch, off until the player turns it on)
+  - *MechWarrior 5-style controls* (optional checkbox; writes
+    `[controls] mw5=1`; the player presses DEFAULT in Options > Controls to
+    load the layout). Unticked keeps MW4's controls.
+- **Install** (shows **Update** when already installed), **Uninstall**,
+  **Close**, and a log of the install output.
+
+Install/uninstall run on a worker thread; the result is shown in a message
+box. If the folder is not writable (Program Files), the installer offers to
+restart itself elevated (`runas`, passing `--dir "<folder>"` and `--mw5`).
+
+**Update** re-runs install over an existing install: the hook files are
+replaced (not backed up, since they are ours), the MW5 choice is applied, and
+the player's Throttle Decay value from the installed `mw4hook.ini` is kept.
 
 ## What it does
 
@@ -25,7 +53,9 @@ On install it:
 5. patches the `[graphics options]` display keys to 1024x768, 32-bit, and
    `windowed=true` (the Options > Video > Windowed checkbox; see
    `docs/HOOK.md`),
-6. extracts `dinput.dll`, `ddraw.dll`, and `mw4hook.ini`,
+6. extracts `dinput.dll`, `ddraw.dll`, and `mw4hook.ini` (with `[controls]
+   mw5` set from the MW5 choice and `decay` carried over from an existing
+   install),
 7. creates `MechWarrior 4 Mercenaries (Windowed).lnk` and updates the existing
    `Shortcut to MW4Mercs.exe.lnk` to use `-window`,
 8. writes `mw4patch-install.ini` with installed hashes and backup names.
@@ -45,9 +75,9 @@ changes" prompt on every run. The patcher only needs write access to the game
 directory; for an install under `Program Files`, run it from an elevated
 prompt.
 
-## Double-click
+## Double-click (mw4patch.exe)
 
-Started without arguments (double-clicked in Explorer), the patcher finds the
+Started without arguments (double-clicked in Explorer), `mw4patch.exe` finds the
 game by itself: its own folder, the current folder, `..\MekTek\<game>` (repo
 layout), then `Program Files (x86)\MekTek.net\...` and
 `Program Files\MekTek.net\...`. If none contains `MW4Mercs.exe`, it asks for
@@ -58,13 +88,14 @@ The console waits for Enter before closing so the result can be read.
 ## Commands
 
 ```text
-mw4patch.exe install   [install-dir] [--yes]
+mw4patch.exe install   [install-dir] [--yes] [--mw5 | --no-mw5]
 mw4patch.exe uninstall [install-dir] [--yes]
 mw4patch.exe verify    [install-dir]
 mw4patch.exe info      [install-dir]
 ```
 
-If `install-dir` is omitted, the current directory is used.
+If `install-dir` is omitted, the current directory is used. Without `--mw5` /
+`--no-mw5`, install keeps the installed MW5 setting (off on a first install).
 
 Examples:
 
@@ -103,8 +134,12 @@ Shortcut to MW4Mercs.exe.lnk.mw4patch-backup
 installed file hashes, shortcut names, and backup names. Uninstall uses it to
 remove only files that match the recorded hooks and to restore the backups.
 
-If a recorded hook hash does not match the file on disk, uninstall leaves that
-file alone and keeps the backup rather than overwriting user changes.
+If a recorded `dinput.dll` / `ddraw.dll` hash does not match the file on
+disk, uninstall leaves that file alone and keeps the backup rather than
+overwriting user changes. `mw4hook.ini` is always removed (the game writes
+the Throttle Decay choice to it, so its hash changes), as are the
+`mw4hook-*.log` files; a pre-existing `mw4hook.ini` is restored from its
+backup.
 
 ## Build
 
@@ -114,14 +149,22 @@ pwsh ./src/patcher/build.ps1   # builds artifacts/mw4patch.exe and publishes dis
 ```
 
 The patcher build generates an RC file, compiles the resources with `rc.exe`,
-and links a single console executable (`/MT`, no VC++ redistributable). Use
-`dist\mw4patch.exe` for testing; it is the stable copy of the build output.
+and links both executables (`/MT`, no VC++ redistributable; the GUI build
+embeds a Common Controls 6 manifest for visual styles, and both are
+`asInvoker`). Use `dist\mw4patch.exe` for command-line testing and
+`pwsh ./tools/New-Mw4Release.ps1` for the release installer.
+
+Tested 2026-11-16 from a fresh `MekTek.rar` extraction: GUI install with MW5
+ticked (`mw5=1`, `decay=0`), Update with MW5 unticked after setting
+`decay=1` (result `mw5=0`, `decay=1`, no hook backups created), GUI
+uninstall (full manifest: 0 missing, 0 mismatched, no leftovers), then a
+command-line install, game launch to the hook-ready log, uninstall and a
+clean full-manifest check.
 
 ## Current limitations
 
 - The frontend is still generated at 800x600 and upscaled by the `ddraw.dll`
   proxy; the layout is preserved but the menu art is slightly softer.
-- The patcher installs the development hook, not a final release payload.
 - The install record is a simple key/value file, not a signed manifest.
 - The patcher does not install or remove the test-only intro skip. That helper
   is separate (`tools/Set-Mw4IntroSkip.ps1`).

@@ -19,12 +19,22 @@ Rebirth. The product is a runtime patch that:
 - only acts on the supported build (every patch site is found by a unique
   byte pattern; anything else leaves the game untouched)
 
-The release artifact is a **zip** (`MW4Mercs-WindowedPatch-<version>.zip`,
-built by `tools/New-Mw4Release.ps1`): `dinput.dll`, `ddraw.dll`, `mw4hook.ini`
-and `WindowedPatch-README.txt`, copied next to `MW4Mercs.exe`. Uninstall is
-deleting those files. `mw4patch.exe` (`src/patcher/`) remains a development
-installer with hash verification and an install record; it is not the
-release. (Changed 2026-11-16 from a single-`.exe` release.)
+The release artifact is a **GUI installer**,
+`MW4Mercs-WindowedPatch-Setup-<version>.exe` (built by
+`tools/New-Mw4Release.ps1` from `src/patcher/` with `MW4PATCH_GUI`). It finds
+or asks for the game folder, verifies 3.1c, and installs:
+
+- windowed mode and the display fixes (required),
+- the Throttle Decay setting (always included; off until switched on in
+  Options > Game),
+- optionally the MechWarrior 5-style controls (`[controls] mw5`), for players
+  who want them; unticked keeps MW4's controls.
+
+It backs up what it changes, writes an install record, updates an existing
+install in place (keeping the player's Throttle Decay choice), and
+uninstalls back to a folder that matches the full 3.1c manifest.
+`mw4patch.exe` is the command-line build of the same code for testing.
+(2026-11-16: zip release replaced by the installer.)
 
 ## 2. Supported baseline
 
@@ -249,16 +259,16 @@ AntiHack.
 
 ## 5. Recommended technical direction
 
-A **runtime hook** shipped as a zip:
+A **runtime hook** shipped in a GUI installer:
 
 ```text
-release zip                   copied into the game folder
-  - dinput.dll, ddraw.dll       runtime proxies (below)
-  - mw4hook.ini                 per-fix switches, logging
-  - WindowedPatch-README.txt    install/uninstall instructions
-  - no file may share a name with a game file (the build checks)
+MW4Mercs-WindowedPatch-Setup-<version>.exe   (src/patcher, MW4PATCH_GUI)
+  - verifies the 3.1c build and core files
+  - installs dinput.dll, ddraw.dll, mw4hook.ini (embedded), optional MW5 controls
+  - backs up options.ini / shortcut / conflicting files, writes an install record
+  - updates in place; uninstall restores the original folder
 
-mw4patch.exe (development)    installer with hash checks and install record
+mw4patch.exe                  command-line build of the same code (testing)
 
 dinput.dll / ddraw.dll          native runtime hook
   - loaded by MW4Mercs.exe
@@ -291,8 +301,8 @@ dinput.dll / ddraw.dll          native runtime hook
 | `manifests/` | Core and full hash manifests |
 | `templates/options.ini` | Known-good configuration template |
 | `src/hook/` | Native dinput proxy and window/resolution hooks |
-| `src/patcher/` | Development installer (`mw4patch.exe`); the release is a zip |
-| `tools/New-Mw4Release.ps1` | Builds the release zip (hook files + player README) |
+| `src/patcher/` | Installer: GUI release build and command-line `mw4patch.exe` |
+| `tools/New-Mw4Release.ps1` | Builds the release installer (`dist\MW4Mercs-WindowedPatch-Setup-<version>.exe`) |
 | `tools/Get-Mw4InstallInfo.ps1` | Identify a build and validate options.ini |
 | `tools/Test-Mw4Manifest.ps1` | Verify files against a manifest |
 | `tools/Repair-Mw4Config.ps1` | Write a safe options.ini with backup |
@@ -349,9 +359,10 @@ High-value files:
    a multiplayer test plan.
 8. **Patch data must be reversible.** Back up every changed file and write an
    install record.
-9. **The release is a zip** built by `tools/New-Mw4Release.ps1`: the hook
-   files plus `WindowedPatch-README.txt`, nothing else, and no file named like
-   a game file (the game folder has its own `README.txt`).
+9. **The release is the GUI installer** built by `tools/New-Mw4Release.ps1`.
+   It must never write a file named like a game file (the game folder has its
+   own `README.txt`), and the shipped `mw4hook.ini` must not enable debug or
+   opt-in features (the build checks).
 10. **Document every binary change** with:
     - target file name and SHA-256
     - version
@@ -510,11 +521,11 @@ High-value files:
 
 ## 10. Definition of done for the first release
 
-- A user with a 3.1c install extracts one zip into the game folder.
+- A user with a 3.1c install runs one installer (MW5 controls optional).
 - The game launches windowed; Options > Video has the Windowed checkbox.
 - The in-game options menu can change resolution.
 - The listed first-release fixes are present or explicitly scoped out.
 - AntiHack remains active.
-- Uninstall is deleting the zip's files; the game folder then matches the full
+- Uninstall (from the installer) leaves a folder that matches the full
   manifest again.
 - No game files are redistributed.

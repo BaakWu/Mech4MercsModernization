@@ -30,7 +30,7 @@
 
 namespace {
 
-constexpr const wchar_t* kToolVersion = L"0.1.0";
+constexpr const wchar_t* kToolVersion = L"1.1.0";
 constexpr const char* kExpectedExeSha256 =
     "72bbb1ba3e5e5e7dc7607ca403f3d9aca301d0b16814a6b577bda7ec5c922b41";
 constexpr const wchar_t* kGameExe = L"MW4Mercs.exe";
@@ -54,20 +54,33 @@ constexpr const wchar_t* kExistingShortcutBackup =
 // Console and string helpers
 // ---------------------------------------------------------------------------
 
+// The GUI installer build (MW4PATCH_GUI) sends all output to its log box
+// through this sink instead of the console.
+void (*g_output_sink)(const wchar_t* text) = nullptr;
+
+void PrintTo(FILE* stream, const wchar_t* fmt, va_list args) {
+    if (g_output_sink) {
+        wchar_t buffer[2048];
+        _vsnwprintf_s(buffer, _TRUNCATE, fmt, args);
+        g_output_sink(buffer);
+        return;
+    }
+    vfwprintf(stream, fmt, args);
+    fflush(stream);
+}
+
 void Print(const wchar_t* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    vwprintf(fmt, args);
+    PrintTo(stdout, fmt, args);
     va_end(args);
-    fflush(stdout);
 }
 
 void PrintError(const wchar_t* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    vfwprintf(stderr, fmt, args);
+    PrintTo(stderr, fmt, args);
     va_end(args);
-    fflush(stderr);
 }
 
 std::wstring Join(const std::wstring& dir, const wchar_t* name) {
@@ -743,7 +756,53 @@ bool PromptYesNo(const wchar_t* question) {
     return buffer[0] == L'y' || buffer[0] == L'Y';
 }
 
-int CommandInstall(const std::wstring& install, bool assumeYes) {
+// The [controls] mw5 value in an installed mw4hook.ini: 1, 0, or -1 when
+// there is no such file or key.
+int InstalledMw5(const std::wstring& install) {
+    const std::wstring path = Join(install, kIniName);
+    if (!FileExists(path)) {
+        return -1;
+    }
+    return static_cast<int>(GetPrivateProfileIntW(L"controls", L"mw5", -1, path.c_str()));
+}
+
+// Sets "key=value" inside "[section]" of an ini held as text (CRLF lines).
+// Adds the key, or the section, when missing.
+void SetIniValue(std::string& text, const std::string& section, const std::string& key,
+                 const std::string& value) {
+    const std::string header = "[" + section + "]";
+    size_t at = text.find(header);
+    if (at == std::string::npos) {
+        if (!text.empty() && text.back() != '\n') {
+            text += "\r\n";
+        }
+        text += "\r\n" + header + "\r\n" + key + "=" + value + "\r\n";
+        return;
+    }
+    size_t line = text.find('\n', at);
+    line = line == std::string::npos ? text.size() : line + 1;
+    size_t end = text.find("\n[", line);
+    end = end == std::string::npos ? text.size() : end + 1;
+    for (size_t pos = line; pos < end;) {
+        size_t eol = text.find('\n', pos);
+        eol = eol == std::string::npos ? text.size() : eol;
+        if (text.compare(pos, key.size() + 1, key + "=") == 0) {
+            size_t value_end = eol;
+            if (value_end > pos && text[value_end - 1] == '\r') {
+                --value_end;
+            }
+            text.replace(pos + key.size() + 1, value_end - pos - key.size() - 1, value);
+            return;
+        }
+        pos = eol + 1;
+    }
+    text.insert(end, key + "=" + value + "\r\n");
+}
+
+// mw5: 1 / 0 = MW5-style controls on / off; -1 = keep the installed value
+// (off on a first install). The Throttle Decay choice made in the game
+// (Options > Game, saved in mw4hook.ini) is kept across re-installs.
+int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1) {
     Print(L"mw4patch %ls - install\n", kToolVersion);
     Print(L"Install: %ls\n\n", install.c_str());
 
@@ -792,6 +851,20 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
         PrintError(L"error: embedded hook payload is missing\n");
         return 1;
     }
+    {
+        const int installed_mw5 = InstalledMw5(install);
+        const bool use_mw5 = mw5 >= 0 ? mw5 != 0 : installed_mw5 == 1;
+        const std::wstring existing = Join(install, kIniName);
+        const int decay = FileExists(existing)
+                              ? static_cast<int>(GetPrivateProfileIntW(L"controls", L"decay", 0,
+                                                                       existing.c_str()))
+                              : 0;
+        std::string text(ini.begin(), ini.end());
+        SetIniValue(text, "controls", "mw5", use_mw5 ? "1" : "0");
+        SetIniValue(text, "controls", "decay", decay ? "1" : "0");
+        ini.assign(text.begin(), text.end());
+        Print(L"MechWarrior 5-style controls: %ls\n", use_mw5 ? L"on" : L"off");
+    }
     std::string dinputHash;
     std::string ddrawHash;
     std::string iniHash;
@@ -838,6 +911,13 @@ int CommandInstall(const std::wstring& install, bool assumeYes) {
         if (Sha256File(iniPath, existingHash) && existingHash == iniHash) {
             backupIni = false;
         }
+    }
+    // Updating our own install: the hook files there are ours (an older
+    // version, or mw4hook.ini changed by the game), not files to restore.
+    if (FileExists(recordPath)) {
+        backupDinput = false;
+        backupDdraw = false;
+        backupIni = false;
     }
 
     Print(L"\nPlan:\n");
@@ -1117,7 +1197,22 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
 
     removeIfMatches(dinputPath, recordDinputHash);
     removeIfMatches(ddrawPath, recordDdrawHash);
-    removeIfMatches(iniPath, recordIniHash);
+    // mw4hook.ini is the patch's own settings file; the game writes to it
+    // (Throttle Decay), so its hash changes. Always remove it (a
+    // previous one, if any, is restored from its backup below).
+    (void)recordIniHash;
+    if (FileExists(iniPath)) {
+        DeleteFileW(iniPath.c_str());
+    }
+    // Hook log files.
+    WIN32_FIND_DATAW found{};
+    HANDLE find = FindFirstFileW(Join(install, L"mw4hook-*.log").c_str(), &found);
+    if (find != INVALID_HANDLE_VALUE) {
+        do {
+            DeleteFileW(Join(install, found.cFileName).c_str());
+        } while (FindNextFileW(find, &found));
+        FindClose(find);
+    }
 
     if (FileExists(shortcutPath)) {
         DeleteFileW(shortcutPath.c_str());
@@ -1282,7 +1377,7 @@ int CommandInfo(const std::wstring& install) {
 void PrintUsage() {
     Print(L"mw4patch %ls\n", kToolVersion);
     Print(L"Usage:\n");
-    Print(L"  mw4patch.exe install   [install-dir] [--yes]\n");
+    Print(L"  mw4patch.exe install   [install-dir] [--yes] [--mw5 | --no-mw5]\n");
     Print(L"  mw4patch.exe uninstall [install-dir] [--yes]\n");
     Print(L"  mw4patch.exe verify    [install-dir]\n");
     Print(L"  mw4patch.exe info      [install-dir]\n");
@@ -1420,6 +1515,433 @@ int RunInteractive() {
 
 }  // namespace
 
+#ifdef MW4PATCH_GUI
+// ---------------------------------------------------------------------------
+// GUI installer (MW4Mercs-WindowedPatch-Setup.exe). Same install/uninstall
+// code as the command line build; this is only the window around it.
+// ---------------------------------------------------------------------------
+#include <commctrl.h>
+#include <shellapi.h>
+#include <shobjidl.h>
+
+#include <thread>
+
+namespace gui {
+
+enum : int {
+    kIdFolder = 100,
+    kIdBrowse,
+    kIdStatus,
+    kIdWindowed,
+    kIdDecay,
+    kIdMw5,
+    kIdLog,
+    kIdInstall,
+    kIdUninstall,
+    kIdClose,
+};
+constexpr UINT kMsgLog = WM_APP + 1;   // lParam: heap string (free())
+constexpr UINT kMsgDone = WM_APP + 2;  // wParam: result, lParam: 1 install, 2 uninstall
+constexpr UINT_PTR kCheckTimer = 1;
+
+HWND g_wnd = nullptr;
+HWND g_folder = nullptr;
+HWND g_status = nullptr;
+HWND g_mw5 = nullptr;
+HWND g_log = nullptr;
+HWND g_install = nullptr;
+HWND g_uninstall = nullptr;
+HWND g_browse = nullptr;
+HFONT g_font = nullptr;
+HFONT g_title_font = nullptr;
+HFONT g_mono = nullptr;
+int g_dpi = 96;
+bool g_busy = false;
+bool g_supported = false;
+bool g_installed = false;
+
+int S(int v) { return MulDiv(v, g_dpi, 96); }
+
+void Sink(const wchar_t* text) {
+    std::wstring t;
+    for (const wchar_t* p = text; *p; ++p) {
+        if (*p == L'\n') {
+            t += L"\r\n";
+        } else {
+            t += *p;
+        }
+    }
+    PostMessageW(g_wnd, kMsgLog, 0, reinterpret_cast<LPARAM>(_wcsdup(t.c_str())));
+}
+
+std::wstring FolderText() {
+    wchar_t buffer[MAX_PATH * 2] = {};
+    GetWindowTextW(g_folder, buffer, MAX_PATH * 2);
+    std::wstring path = buffer;
+    while (!path.empty() && (path.back() == L' ' || path.back() == L'"')) {
+        path.pop_back();
+    }
+    while (!path.empty() && (path.front() == L' ' || path.front() == L'"')) {
+        path.erase(0, 1);
+    }
+    const std::wstring exe_name = L"mw4mercs.exe";
+    if (path.size() >= exe_name.size() &&
+        _wcsicmp(path.c_str() + path.size() - exe_name.size(), exe_name.c_str()) == 0) {
+        size_t slash = path.find_last_of(L"\\/");
+        path = slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
+    }
+    return path.empty() ? path : NormalizePath(path);
+}
+
+void UpdateState() {
+    const std::wstring dir = FolderText();
+    g_supported = false;
+    g_installed = false;
+    const wchar_t* status = L"";
+    if (dir.empty()) {
+        status = L"Choose the folder that contains MW4Mercs.exe.";
+    } else if (!IsGameDir(dir)) {
+        status = L"MW4Mercs.exe was not found in this folder.";
+    } else {
+        std::string hash;
+        if (Sha256File(Join(dir, kGameExe), hash) && hash == kExpectedExeSha256) {
+            g_supported = true;
+            g_installed = FileExists(Join(dir, kRecordName));
+            status = g_installed ? L"\x2714  MechWarrior 4: Mercenaries 3.1c - the patch is installed."
+                                 : L"\x2714  MechWarrior 4: Mercenaries 3.1c found.";
+        } else {
+            status = L"This MW4Mercs.exe is not the supported 3.1c version (51.03.01.0030).";
+        }
+    }
+    SetWindowTextW(g_status, status);
+    if (g_installed) {
+        SendMessageW(g_mw5, BM_SETCHECK, InstalledMw5(dir) == 1 ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+    SetWindowTextW(g_install, g_installed ? L"Update" : L"Install");
+    EnableWindow(g_install, g_supported && !g_busy);
+    EnableWindow(g_uninstall, g_installed && !g_busy);
+    EnableWindow(g_browse, !g_busy);
+    EnableWindow(g_folder, !g_busy);
+    EnableWindow(g_mw5, !g_busy);
+}
+
+void Browse() {
+    IFileOpenDialog* dialog = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&dialog)))) {
+        return;
+    }
+    DWORD options = 0;
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+    dialog->SetTitle(L"Select the MechWarrior 4: Mercenaries folder (contains MW4Mercs.exe)");
+    if (SUCCEEDED(dialog->Show(g_wnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dialog->GetResult(&item))) {
+            PWSTR path = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                SetWindowTextW(g_folder, path);
+                CoTaskMemFree(path);
+            }
+            item->Release();
+        }
+    }
+    dialog->Release();
+    UpdateState();
+}
+
+// Folders under Program Files usually need administrator rights.
+bool CanWrite(const std::wstring& dir) {
+    const std::wstring probe = Join(dir, L"mw4patch-write-test.tmp");
+    HANDLE file = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    CloseHandle(file);
+    return true;
+}
+
+bool RestartAsAdmin(const std::wstring& dir) {
+    wchar_t exe[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring params = L"--dir \"" + dir + L"\"";
+    if (SendMessageW(g_mw5, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+        params += L" --mw5";
+    }
+    SHELLEXECUTEINFOW info{};
+    info.cbSize = sizeof(info);
+    info.lpVerb = L"runas";
+    info.lpFile = exe;
+    info.lpParameters = params.c_str();
+    info.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&info) != FALSE;
+}
+
+void Run(int action) {
+    const std::wstring dir = FolderText();
+    if (!CanWrite(dir)) {
+        if (MessageBoxW(g_wnd,
+                        L"Windows does not allow changes in this folder without administrator "
+                        L"rights.\n\nRestart the installer as administrator?",
+                        L"Administrator rights needed", MB_YESNO | MB_ICONQUESTION) == IDYES &&
+            RestartAsAdmin(dir)) {
+            DestroyWindow(g_wnd);
+        }
+        return;
+    }
+    if (action == 2 &&
+        MessageBoxW(g_wnd,
+                    L"Remove the patch? The game's own files were never changed; your previous "
+                    L"options.ini and shortcut are restored.",
+                    L"Uninstall", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+        return;
+    }
+    const bool mw5 = SendMessageW(g_mw5, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    g_busy = true;
+    UpdateState();
+    SetWindowTextW(g_log, L"");
+    std::thread([dir, mw5, action]() {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const int result = action == 1 ? CommandInstall(dir, true, mw5 ? 1 : 0)
+                                       : CommandUninstall(dir, true);
+        CoUninitialize();
+        PostMessageW(g_wnd, kMsgDone, static_cast<WPARAM>(result), action);
+    }).detach();
+}
+
+void Finished(int result, int action) {
+    g_busy = false;
+    UpdateState();
+    if (action == 2) {
+        MessageBoxW(g_wnd,
+                    result == 0 ? L"The patch was removed."
+                                : L"Uninstall did not complete. See the log for details.",
+                    L"Uninstall", MB_OK | (result == 0 ? MB_ICONINFORMATION : MB_ICONWARNING));
+        return;
+    }
+    if (result != 0) {
+        const wchar_t* why = result == 3 ? L"Close MechWarrior 4 and try again."
+                           : result == 2 ? L"This is not an unmodified MechWarrior 4: "
+                                           L"Mercenaries 3.1c install. Nothing was changed."
+                                         : L"See the log for details. Nothing was left half "
+                                           L"installed.";
+        MessageBoxW(g_wnd, why, L"Installation failed", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    std::wstring text =
+        L"The patch is installed. Start the game as usual.\n\n"
+        L"\x2022 Windowed / borderless: Options > Video > Windowed (Alt+Enter switches)\n"
+        L"\x2022 Throttle Decay: Options > Game (off until you turn it on)";
+    if (SendMessageW(g_mw5, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+        text += L"\n\x2022 MechWarrior 5-style controls: in Options > Controls press DEFAULT, "
+                L"then OK, to load the MW5 key layout";
+    }
+    MessageBoxW(g_wnd, text.c_str(), L"Installed", MB_OK | MB_ICONINFORMATION);
+}
+
+HWND Child(const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w, int h,
+           int id, HFONT font = nullptr) {
+    HWND hwnd = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, S(x), S(y), S(w),
+                                S(h), g_wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                                GetModuleHandleW(nullptr), nullptr);
+    SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font ? font : g_font), TRUE);
+    return hwnd;
+}
+
+void CreateControls(const std::wstring& initial_dir, bool initial_mw5) {
+    std::wstring title = std::wstring(L"MechWarrior 4: Mercenaries \x2014 Windowed Patch ") +
+                         kToolVersion;
+    Child(L"STATIC", title.c_str(), 0, 16, 14, 580, 26, 0, g_title_font);
+    Child(L"STATIC",
+          L"For MechWarrior 4: Mercenaries 3.1c (MekTek). No game file is changed; uninstall "
+          L"puts everything back.",
+          0, 16, 44, 580, 20, 0);
+
+    Child(L"STATIC", L"Game folder (contains MW4Mercs.exe):", 0, 16, 76, 400, 18, 0);
+    g_folder = Child(L"EDIT", initial_dir.c_str(), WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 16,
+                     96, 480, 24, kIdFolder);
+    g_browse = Child(L"BUTTON", L"Browse...", WS_TABSTOP | BS_PUSHBUTTON, 504, 95, 92, 26,
+                     kIdBrowse);
+    g_status = Child(L"STATIC", L"", 0, 16, 126, 580, 20, kIdStatus);
+
+    Child(L"BUTTON", L"Components", BS_GROUPBOX, 16, 154, 580, 212, 0);
+    HWND windowed = Child(L"BUTTON", L"Windowed mode and display fixes (required)",
+                          BS_AUTOCHECKBOX, 30, 176, 550, 20, kIdWindowed);
+    SendMessageW(windowed, BM_SETCHECK, BST_CHECKED, 0);
+    EnableWindow(windowed, FALSE);
+    Child(L"STATIC",
+          L"Windowed checkbox in Options > Video (framed window or borderless fullscreen, "
+          L"Alt+Enter switches); frame rate, audio, terrain and second-monitor fixes.",
+          0, 50, 197, 530, 32, 0);
+    HWND decay = Child(L"BUTTON", L"Throttle Decay setting (included)", BS_AUTOCHECKBOX, 30,
+                       236, 550, 20, kIdDecay);
+    SendMessageW(decay, BM_SETCHECK, BST_CHECKED, 0);
+    EnableWindow(decay, FALSE);
+    Child(L"STATIC",
+          L"Adds a Throttle Decay On/Off switch to Options > Game. Off until you turn it on.", 0,
+          50, 257, 530, 18, 0);
+    g_mw5 = Child(L"BUTTON", L"MechWarrior 5-style controls (optional)",
+                  WS_TABSTOP | BS_AUTOCHECKBOX, 30, 284, 550, 20, kIdMw5);
+    SendMessageW(g_mw5, BM_SETCHECK, initial_mw5 ? BST_CHECKED : BST_UNCHECKED, 0);
+    Child(L"STATIC",
+          L"Faster W/S throttle, and Options > Controls > DEFAULT loads an MW5-style key layout "
+          L"(X full stop, P power, numpad throttle presets, mouse aims the torso). Leave "
+          L"unticked to keep MW4's controls.",
+          0, 50, 305, 530, 48, 0);
+
+    g_log = Child(L"EDIT", L"",
+                  WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 16, 376,
+                  580, 112, kIdLog, g_mono);
+    g_install = Child(L"BUTTON", L"Install", WS_TABSTOP | BS_DEFPUSHBUTTON, 288, 500, 96, 30,
+                      kIdInstall);
+    g_uninstall =
+        Child(L"BUTTON", L"Uninstall", WS_TABSTOP | BS_PUSHBUTTON, 394, 500, 96, 30, kIdUninstall);
+    Child(L"BUTTON", L"Close", WS_TABSTOP | BS_PUSHBUTTON, 500, 500, 96, 30, kIdClose);
+}
+
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    switch (msg) {
+        case WM_COMMAND:
+            switch (LOWORD(wparam)) {
+                case kIdBrowse:
+                    Browse();
+                    return 0;
+                case kIdInstall:
+                    Run(1);
+                    return 0;
+                case kIdUninstall:
+                    Run(2);
+                    return 0;
+                case kIdClose:
+                    if (!g_busy) {
+                        DestroyWindow(hwnd);
+                    }
+                    return 0;
+                case kIdFolder:
+                    if (HIWORD(wparam) == EN_CHANGE) {
+                        SetTimer(hwnd, kCheckTimer, 400, nullptr);
+                    }
+                    return 0;
+            }
+            break;
+        case WM_TIMER:
+            if (wparam == kCheckTimer) {
+                KillTimer(hwnd, kCheckTimer);
+                UpdateState();
+            }
+            return 0;
+        case kMsgLog: {
+            wchar_t* text = reinterpret_cast<wchar_t*>(lparam);
+            const int length = GetWindowTextLengthW(g_log);
+            SendMessageW(g_log, EM_SETSEL, length, length);
+            SendMessageW(g_log, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(text));
+            free(text);
+            return 0;
+        }
+        case kMsgDone:
+            Finished(static_cast<int>(wparam), static_cast<int>(lparam));
+            return 0;
+        case WM_CTLCOLORSTATIC:
+            if (reinterpret_cast<HWND>(lparam) != g_log) {
+                SetBkMode(reinterpret_cast<HDC>(wparam), TRANSPARENT);
+                return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+            }
+            break;
+        case WM_CLOSE:
+            if (!g_busy) {
+                DestroyWindow(hwnd);
+            }
+            return 0;
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+}  // namespace gui
+
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
+    SetProcessDPIAware();
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES};
+    InitCommonControlsEx(&controls);
+
+    // --dir "<folder>" and --mw5 are passed when restarting as administrator.
+    std::wstring dir;
+    bool mw5 = false;
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    for (int i = 1; argv && i < argc; ++i) {
+        if (_wcsicmp(argv[i], L"--dir") == 0 && i + 1 < argc) {
+            dir = argv[++i];
+        } else if (_wcsicmp(argv[i], L"--mw5") == 0) {
+            mw5 = true;
+        }
+    }
+    if (argv) {
+        LocalFree(argv);
+    }
+    if (dir.empty()) {
+        dir = FindGameDir();
+        if (!dir.empty()) {
+            mw5 = InstalledMw5(dir) == 1;
+        }
+    }
+
+    HDC screen = GetDC(nullptr);
+    gui::g_dpi = GetDeviceCaps(screen, LOGPIXELSY);
+    ReleaseDC(nullptr, screen);
+    NONCLIENTMETRICSW metrics{};
+    metrics.cbSize = sizeof(metrics);
+    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0);
+    gui::g_font = CreateFontIndirectW(&metrics.lfMessageFont);
+    LOGFONTW title = metrics.lfMessageFont;
+    title.lfHeight = -MulDiv(14, gui::g_dpi, 72);
+    title.lfWeight = FW_SEMIBOLD;
+    gui::g_title_font = CreateFontIndirectW(&title);
+    LOGFONTW mono = metrics.lfMessageFont;
+    wcscpy_s(mono.lfFaceName, L"Consolas");
+    gui::g_mono = CreateFontIndirectW(&mono);
+
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = gui::WindowProc;
+    wc.hInstance = instance;
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
+    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.lpszClassName = L"MW4WindowedPatchSetup";
+    RegisterClassExW(&wc);
+
+    RECT rect = {0, 0, gui::S(612), gui::S(546)};
+    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    AdjustWindowRect(&rect, style, FALSE);
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    gui::g_wnd = CreateWindowExW(0, wc.lpszClassName, L"MechWarrior 4: Mercenaries Windowed Patch",
+                                 style, (GetSystemMetrics(SM_CXSCREEN) - width) / 2,
+                                 (GetSystemMetrics(SM_CYSCREEN) - height) / 2, width, height,
+                                 nullptr, nullptr, instance, nullptr);
+    g_output_sink = gui::Sink;
+    gui::CreateControls(dir, mw5);
+    gui::UpdateState();
+    ShowWindow(gui::g_wnd, show);
+    UpdateWindow(gui::g_wnd);
+
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (!IsDialogMessageW(gui::g_wnd, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    CoUninitialize();
+    return 0;
+}
+#else
+
 int wmain(int argc, wchar_t** argv) {
     if (argc == 1) {
         SetConsoleOutputCP(CP_UTF8);
@@ -1439,11 +1961,16 @@ int wmain(int argc, wchar_t** argv) {
     std::wstring command = L"install";
     std::wstring install;
     bool assumeYes = false;
+    int mw5 = -1;
 
     for (int i = 1; i < argc; ++i) {
         std::wstring arg = argv[i];
         if (arg == L"--yes" || arg == L"-y") {
             assumeYes = true;
+        } else if (arg == L"--mw5") {
+            mw5 = 1;
+        } else if (arg == L"--no-mw5") {
+            mw5 = 0;
         } else if (arg == L"--help" || arg == L"-h" || arg == L"/?") {
             PrintUsage();
             CoUninitialize();
@@ -1467,7 +1994,7 @@ int wmain(int argc, wchar_t** argv) {
     install = NormalizePath(install);
 
     if (command == L"install") {
-        int result = CommandInstall(install, assumeYes);
+        int result = CommandInstall(install, assumeYes, mw5);
         CoUninitialize();
         return result;
     }
@@ -1491,3 +2018,4 @@ int wmain(int argc, wchar_t** argv) {
     CoUninitialize();
     return 1;
 }
+#endif  // MW4PATCH_GUI
