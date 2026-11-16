@@ -15,6 +15,8 @@ namespace mw4hook {
 // Option id answered by the hook for ShellGetOptionValue/ShellSetOptionValue.
 // The game's own MWO_* ids are 0..34.
 constexpr int kMwoWindowed = 200;
+// Option id for Options > Game > Throttle Decay (answered by the hook).
+constexpr int kMwoThrottleDecay = 202;
 
 // Logging
 void LogInit(HINSTANCE self);
@@ -61,10 +63,13 @@ struct Config {
     bool debug_dump_image = false;
     bool debug_automation = false;
     bool controls_mw5 = false;  // [controls] mw5: MW5-style driving (opt-in)
+    bool throttle_decay = false;  // [controls] decay: initial Throttle Decay setting
 };
 
 // MW5-style keyboard driving (controls.cpp).
 bool InstallControlsHooks();
+bool ThrottleDecayEnabled();
+void SetThrottleDecay(bool enabled);  // Options > Game; saved to mw4hook.ini
 void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWORD a2);
 
 const Config& GetConfig();

@@ -91,7 +91,7 @@ DWORD WINAPI HookThread(LPVOID) {
     const mw4hook::Config& config = mw4hook::GetConfig();
     bool display_done = !config.hooks_enabled || !config.display_enabled;
     bool script_done = !config.hooks_enabled || !config.checkbox_enabled;
-    bool controls_done = !config.hooks_enabled || !config.controls_mw5;
+    bool controls_done = !config.hooks_enabled;
     // The packed image is unpacked by the time imports are resolved, but
     // retry briefly in case a pattern is not readable yet.
     for (int i = 0; i < 300; ++i) {

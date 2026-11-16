@@ -43,9 +43,13 @@ constexpr float kSnap = 0.02f;             // below this the throttle is 0
 using Drive_t = void(__thiscall*)(void*, double);
 Drive_t g_drive = nullptr;
 
+constexpr size_t kMinForward = 0x64C;      // float, smallest forward throttle (>0)
+
 double g_last_now = 0.0;
 float g_last_written = 0.0f;
 bool g_have_last = false;
+volatile LONG g_decay = 0;      // Options > Game > Throttle Decay
+bool g_decay_armed = false;     // last throttle change came from W/S
 
 float Clamp(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -62,21 +66,33 @@ void __fastcall Hook_Drive(char* self, void*, double now) {
     }
     g_last_now = now;
 
-    // Faster W/S: repeat the game's own step (small changes only, so the
-    // throttle presets and the minimum-speed jumps are left alone).
+    // Faster W/S (mw5 only): repeat the game's own step (small changes only,
+    // so the throttle presets and the minimum-speed jumps are left alone).
     const float delta = t - before;
-    if ((forward || backward) && delta != 0.0f && std::fabs(delta) <= 0.1f) {
+    if (GetConfig().controls_mw5 && (forward || backward) && delta != 0.0f &&
+        std::fabs(delta) <= 0.1f) {
         t += delta * (kRampFactor - 1.0f);
     }
 
-    // Reverse decay, only when nothing else (joystick, presets) set the
-    // throttle this frame: the value still matches what was written last.
+    // Throttle decay applies to a throttle set with W/S. A throttle set any
+    // other way (number-key presets and X inside the game's step, a joystick
+    // before it) holds until W/S is used again.
     const bool untouched = !g_have_last || std::fabs(before - g_last_written) < 1e-6f;
-    if (t < 0.0f && !forward && !backward && untouched && dt > 0.0) {
+    if (forward || backward) {
+        g_decay_armed = true;
+    } else if (!untouched || std::fabs(delta) > 1e-6f) {
+        g_decay_armed = false;
+    }
+    if (g_decay && g_decay_armed && !forward && !backward && t != 0.0f && dt > 0.0) {
+        // Ease toward 0 (fast at first, then slower); below the mech's
+        // smallest forward/reverse throttle the throttle is 0.
         t *= static_cast<float>(std::exp(-dt / kDecayTau));
-        float floor = *reinterpret_cast<float*>(self + kMinReverse);
-        floor = (floor < 0.0f && floor > -0.5f) ? floor : -kSnap;
-        if (t > floor || t > -kSnap) {
+        float min_forward = *reinterpret_cast<float*>(self + kMinForward);
+        float min_reverse = *reinterpret_cast<float*>(self + kMinReverse);
+        min_forward = (min_forward > 0.0f && min_forward < 0.5f) ? min_forward : kSnap;
+        min_reverse = (min_reverse < 0.0f && min_reverse > -0.5f) ? min_reverse : -kSnap;
+        if ((t > 0.0f && t < min_forward) || (t < 0.0f && t > min_reverse) ||
+            std::fabs(t) < kSnap) {
             t = 0.0f;
         }
     }
@@ -197,12 +213,30 @@ void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWOR
     Log("controls: MW5 key layout applied (%d bindings, mouse on, mouse X = torso)\n", applied);
 }
 
-// Returns true when done (installed or not applicable) so the caller stops
-// retrying.
+bool ThrottleDecayEnabled() { return g_decay != 0; }
+
+void SetThrottleDecay(bool enabled) {
+    InterlockedExchange(&g_decay, enabled ? 1 : 0);
+    g_decay_armed = false;  // a throttle already set holds
+    wchar_t path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    wchar_t* slash = len ? wcsrchr(path, L'\\') : nullptr;
+    if (slash) {
+        wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"mw4hook.ini");
+        WritePrivateProfileStringW(L"controls", L"decay", enabled ? L"1" : L"0", path);
+    }
+    Log("controls: throttle decay %s\n", enabled ? "on" : "off");
+}
+
+// Returns true when done so the caller stops retrying. The drive hook is
+// installed whenever the hook layer is on, because Throttle Decay can be
+// switched on in Options > Game at any time; with decay off and mw5=0 it
+// changes nothing.
 bool InstallControlsHooks() {
-    if (g_installed || !GetConfig().controls_mw5) {
+    if (g_installed) {
         return true;
     }
+    InterlockedExchange(&g_decay, GetConfig().throttle_decay ? 1 : 0);
     unsigned char* drive = FindUnique(
         "keyboard_drive",
         "51 DD 44 24 08 53 55 56 8B F1 D9 C0 DC A6 E4 00 00 00 8B 86 DC 03 00 00 33 DB 3B C3 57");
@@ -213,7 +247,8 @@ bool InstallControlsHooks() {
     // push ecx; fld qword [esp+8] = 5 bytes, position independent.
     InstallDetour(drive, 5, reinterpret_cast<void*>(&Hook_Drive),
                   reinterpret_cast<void**>(&g_drive));
-    Log("controls: MW5-style driving %s\n", g_drive ? "on" : "FAILED");
+    Log("controls: drive hook %s (mw5 %d, throttle decay %d)\n", g_drive ? "ok" : "FAILED",
+        GetConfig().controls_mw5 ? 1 : 0, static_cast<int>(g_decay));
     return true;
 }
 

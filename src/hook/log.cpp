@@ -57,6 +57,7 @@ void LoadConfig() {
     g_config.debug_automation =
         GetPrivateProfileIntW(L"debug", L"automation", 0, path) != 0;
     g_config.controls_mw5 = GetPrivateProfileIntW(L"controls", L"mw5", 0, path) != 0;
+    g_config.throttle_decay = GetPrivateProfileIntW(L"controls", L"decay", 0, path) != 0;
 }
 
 }  // namespace

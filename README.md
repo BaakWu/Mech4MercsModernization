@@ -26,9 +26,11 @@ The first release is a **windowed-mode patch**:
 - keep the game’s **AntiHack active and untouched**
 
 Optional, off by default: **MechWarrior 5-style controls** (`[controls] mw5=1`
-in `mw4hook.ini`): faster W/S throttle, reverse throttle eases back to zero,
-and an MW5-style key layout (X full stop, P power, numpad presets, …) loaded
-with the DEFAULT button in Options > Controls. Details in `docs/HOOK.md`.
+in `mw4hook.ini`): faster W/S throttle and an MW5-style key layout (X full
+stop, P power, numpad presets, mouse aims the torso, …) loaded with the
+DEFAULT button in Options > Controls; and **Throttle Decay**, an On/Off
+switch on Options > Game (throttle eases back to zero when W/S is released).
+Details in `docs/HOOK.md`.
 
 Making windowed mode usable also fixed four bugs that are in the stock game on
 current Windows: low mission frame rate, garbled audio, see-through terrain,

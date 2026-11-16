@@ -29,6 +29,7 @@ using MemberFetch_t = void(__fastcall*)(unsigned char* entry, void* edx, void* a
 MemberFetch_t g_member_fetch = nullptr;
 
 constexpr char kTargetName[] = "mercsshellscripts\\OM_Video.script";
+constexpr char kGameTarget[] = "mercsshellscripts\\OM_Game.script";
 constexpr char kMarker[] = "MW4HOOK_WINDOWED";
 
 // Entry layout (3.1c, matches the retail oracle's FUN_00413480/00413830).
@@ -182,6 +183,26 @@ std::string Compact(const std::string& text) {
     return out;
 }
 
+// Writes |text| back into the game's buffer at the same length: a marker
+// comment padded with spaces, then the compacted script. Leaves the buffer
+// untouched if it does not fit.
+void WriteBack(char* data, size_t size, const std::string& text, const char* name,
+               const char* what) {
+    const std::string body = Compact(text);
+    std::string out = std::string("//") + kMarker;
+    if (out.size() + 2 + body.size() > size) {
+        Log("script: %s rewrite needs %zu bytes, have %zu; skipped\n", name,
+            out.size() + 2 + body.size(), size);
+        return;
+    }
+    out.append(size - out.size() - 2 - body.size(), ' ');
+    out += "\r\n";
+    out += body;
+    memcpy(data, out.data(), size);
+    Log("script: %s added to %s (%zu bytes, %zu spare)\n", what, name, size,
+        size - 2 - body.size() - sizeof(kMarker) - 1);
+}
+
 void InjectWindowedCheckbox(char* data, size_t size) {
     std::string text(data, size);
     if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
@@ -204,21 +225,69 @@ void InjectWindowedCheckbox(char* data, size_t size) {
         Log("script: OM_Video.script anchors not found; checkbox not added\n");
         return;
     }
-    // Final text: a marker comment (padded with spaces to the original
-    // length) followed by the compacted script.
-    const std::string body = Compact(text);
-    std::string out = std::string("//") + kMarker;
-    if (out.size() + 2 + body.size() > size) {
-        Log("script: OM_Video.script rewrite needs %zu bytes, have %zu; skipped\n",
-            out.size() + 2 + body.size(), size);
+    WriteBack(data, size, text, "OM_Video.script", "Windowed checkbox");
+}
+
+// Options > Game: a "Throttle Decay:" row with the tab's own On/Off switch,
+// below Splash Damage, included in the tab's Reset. Talks to the hook through
+// option id kMwoThrottleDecay (202).
+void InjectThrottleDecay(char* data, size_t size) {
+    std::string text(data, size);
+    if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
         return;
     }
-    out.append(size - out.size() - 2 - body.size(), ' ');
-    out += "\r\n";
-    out += body;
-    memcpy(data, out.data(), size);
-    Log("script: Windowed checkbox added to OM_Video.script (%zu bytes, %zu spare)\n",
-        size, size - 2 - body.size() - sizeof(kMarker) - 1);
+    char init[200];
+    sprintf_s(init,
+              "callback($$Shell_CallbackHandler$$,ShellGetOptionValue,%d,nDecay)\r\n"
+              "mail(nMSG_UPDATETOGGLE,nDecay,oDecayOnOff)\r\n",
+              kMwoThrottleDecay);
+    char set[120];
+    sprintf_s(set, "callback($$Shell_CallbackHandler$$,ShellSetOptionValue,%d,", kMwoThrottleDecay);
+    const std::string create =
+        "int nDecay\r\n"
+        "int dDecay\r\n"
+        "object oDecayT = s_Text\r\n"
+        "oDecayT.location = XIndent + TextX,YIndent + TextY + (5 * TextYOff),nZ_TEXT\r\n"
+        "oDecayT.nFontID = IDS_F_OM_LABEL\r\n"
+        "oDecayT.szText = \"Throttle Decay:\"\r\n"
+        "oDecayT.cTextColor = cWhite\r\n"
+        "oDecayT.nJustify = 0\r\n"
+        "oDecayT.nLayoutWidth = TextW\r\n"
+        "oDecayT.nLayoutHeight = TextH\r\n"
+        "initialize(oDecayT)\r\n"
+        "object oDecayOnOff = s_OnOff\r\n"
+        "oDecayOnOff.location = oSplashOnOff.location.x,oSplashOnOff.location.y + TextYOff,"
+        "oSplashOnOff.location.z\r\n"
+        "initialize(oDecayOnOff)\r\n";
+    const std::string mailbox =
+        std::string("case oDecayOnOff:\r\n"
+                    "{\r\n"
+                    "if (getmessage() == nMSG_OPTIONON)\r\n"
+                    "{\r\n"
+                    "nDecay = 1\r\n"
+                    "}\r\n"
+                    "else\r\n"
+                    "{\r\n"
+                    "nDecay = 0\r\n"
+                    "}\r\n") +
+        set + "nDecay)\r\n}\r\nbreak\r\n";
+    const std::string reset = std::string(set) + "dDecay)\r\n";
+
+    bool ok = InsertAfterLine(&text, "initialize(oSplashOnOff)", create);
+    const size_t gui_init = text.find("GUI_INIT");
+    ok = ok && gui_init != std::string::npos &&
+         InsertBeforeLine(&text, "if (first_time)", gui_init, init);
+    ok = ok && InsertAfterLine(&text, "dDiff = nDiff", "dDecay = nDecay\r\n");
+    ok = ok && InsertAfterLine(&text,
+                               "callback($$Shell_CallbackHandler$$,ShellOptionsSetToggleValue,"
+                               "MWO_SPLASHDAMAGE,dSplashToggle)",
+                               reset);
+    ok = ok && InsertBeforeLine(&text, "case oSplashOnOff:", 0, mailbox);
+    if (!ok) {
+        Log("script: OM_Game.script anchors not found; Throttle Decay not added\n");
+        return;
+    }
+    WriteBack(data, size, text, "OM_Game.script", "Throttle Decay switch");
 }
 
 // Development only ([debug] automation=1): save every shell script the game
@@ -266,8 +335,11 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         if (GetConfig().debug_automation) {
             DumpScript(entry);
         }
-        if (entry[kEntryNameLen] != sizeof(kTargetName) - 1 ||
-            _stricmp(reinterpret_cast<char*>(entry + kEntryName), kTargetName) != 0) {
+        const char* name = reinterpret_cast<char*>(entry + kEntryName);
+        const size_t len = entry[kEntryNameLen];
+        const bool video = len == sizeof(kTargetName) - 1 && _stricmp(name, kTargetName) == 0;
+        const bool game = len == sizeof(kGameTarget) - 1 && _stricmp(name, kGameTarget) == 0;
+        if (!video && !game) {
             return;
         }
         const DWORD stored = *reinterpret_cast<DWORD*>(entry + kEntryStored);
@@ -275,10 +347,14 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         char* data = *reinterpret_cast<char**>(entry + kEntryData);
         // Only a decompressed member owns a private buffer that is safe to edit.
         if (!data || stored >= size || size > 1024 * 1024) {
-            Log("script: OM_Video.script not in a private buffer; skipped\n");
+            Log("script: %s not in a private buffer; skipped\n", name);
             return;
         }
-        InjectWindowedCheckbox(data, size);
+        if (video) {
+            InjectWindowedCheckbox(data, size);
+        } else {
+            InjectThrottleDecay(data, size);
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("script: exception while inspecting archive entry\n");
     }

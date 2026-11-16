@@ -195,6 +195,14 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
     if ((cmd == kShellGetOptionValue || cmd == kShellSetOptionValue) && args[2]) {
         const int option = args[1];
         int* value = reinterpret_cast<int*>(args[2]);
+        if (option == kMwoThrottleDecay) {
+            if (cmd == kShellGetOptionValue) {
+                *value = ThrottleDecayEnabled() ? 1 : 0;
+            } else {
+                SetThrottleDecay(*value != 0);
+            }
+            return 1;
+        }
         if (option == kMwoWindowed) {
             if (cmd == kShellGetOptionValue) {
                 *value = g_windowed ? 1 : 0;

@@ -158,9 +158,15 @@ behaves the same):
   categories, texture checksums, and supports a draw filter and a one-frame
   pixel probe through `mw4hook-d3dfilter.txt` (see `ddraw_proxy.cpp`).
 
-### MW5-style controls (opt-in, `[controls] mw5=1`)
+### MW5-style controls (opt-in, `[controls] mw5=1`) and Throttle Decay
 
-Issue #13. Off by default; with `mw5=0` nothing below is installed or changed.
+Issue #13. Both off by default. `mw5=1` gives the faster W/S and the MW5 key
+layout; **Throttle Decay** is a separate On/Off switch on Options > Game
+(below Splash Damage, included in that tab's Reset), saved as
+`[controls] decay=` in `mw4hook.ini`. It is added to `OM_Game.script` in
+memory the same way as the Windowed checkbox (option id 202). The drive hook
+is installed whenever the hook layer is on, so the switch works at any time;
+with `mw5=0` and decay off it changes nothing.
 
 **Driving** (`controls.cpp`). The keyboard drive step `0x0054F2A0`
 (thiscall, one `double` = time; called every frame from `0x00550120`) reads
@@ -170,12 +176,14 @@ command handlers `0x00559120`/`0x005591E0`) and steps the working throttle
 in `+0x564` for the next frame. Per-mech minimums (`+0x64C`, `+0x650`) make
 it skip the band around 0. A 5-byte detour runs the step, then:
 
-- repeats the game's own W/S step once (twice the rate: 0 → full in about
-  1.1 s instead of 2.5 s); only small changes, so presets are untouched,
-- with no throttle key held, eases a reverse throttle to 0 (`t·e^(-dt/0.35 s)`,
-  snapping to 0 at the mech's minimum reverse throttle; about 0.45 s from full
-  reverse); a forward throttle stays where it was set; skipped when something
-  else (joystick, presets) set the throttle that frame,
+- (`mw5=1`) repeats the game's own W/S step once (twice the rate: 0 → full
+  in about 1.1 s instead of 2.5 s); only small changes, so presets are
+  untouched,
+- (Throttle Decay on) with W/S released, eases the throttle to 0 in both
+  directions (`t·e^(-dt/0.35 s)`, snapping to 0 below the mech's minimum
+  forward/reverse throttle: about 0.6 s from full forward, 0.45 s from full
+  reverse). Only a throttle set with W/S decays; one set by a number-key
+  preset, X, or a joystick holds until W/S is used again,
 - S keeps running from forward through 0 into reverse, as in MW4.
 
 **Key layout.** With `mw5=1`, the DEFAULT button in Options > Controls
@@ -215,8 +223,9 @@ The Controls list names keys by scan code, so the arrow keys are shown as
 "Num 8/2/4/6" (the numpad presets show the same names); both work as bound.
 
 Verified in the campaign mission Tharkad - Checkmate: X stops, Numpad 5 = 50%,
-Numpad 0 = 100%, P shuts down and starts up, W/S rates and the reverse decay
-as above.
+Numpad 0 = 100%, P shuts down and starts up, W/S rates as above; with Throttle
+Decay on, full forward and full reverse ease to 0 after release, a Numpad 5
+preset holds, and a W tap from it decays again.
 
 ### Selected resolution
 
@@ -293,7 +302,8 @@ clear_fix=1   ; (default, not in the shipped ini) stop the per-frame rebuild
 zbuffer_fix=1 ; (default, not in the shipped ini) 24-bit depth instead of 16
 depth_fix=1   ; (default, not in the shipped ini) bind the attached depth buffer
 [controls]
-mw5=0         ; MW5-style driving + DEFAULT applies the MW5 key layout
+mw5=0         ; faster W/S + DEFAULT applies the MW5 key layout
+decay=0       ; Throttle Decay (also Options > Game; written there)
 [frontend]
 stretch=1     ; scale the picture into the window
 [log]
