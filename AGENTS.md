@@ -242,8 +242,8 @@ executable edits.
 
 ### 4.6 AntiHack
 
-The DX11 renderer mod explicitly leaves MekTek AntiHack active. We must do the
-same. Do not disable, bypass, or patch out AntiHack.
+MekTek AntiHack must stay active. Do not disable, bypass, or patch out
+AntiHack.
 
 ## 5. Recommended technical direction
 

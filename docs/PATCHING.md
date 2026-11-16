@@ -65,8 +65,8 @@ The intended replacement is small, auditable, and manifest-driven:
    and a valid video driver index. Back up the old file first.
 
 4. **Apply optional layers**
-   The DX11 renderer or other content mods are separate, opt-in layers. They
-   must be installed with their own hash checks and an uninstall record.
+   Content mods are separate, opt-in layers. They must be installed with their
+   own hash checks and an uninstall record.
 
 5. **Record the result**
    Write an install record containing:

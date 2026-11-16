@@ -52,7 +52,6 @@ This is research work. It is not required for the canonical 3.1c base.
 
 ## Milestone 5 — Optional modern layers
 
-- DX11 renderer integration with hash checks and uninstall records.
 - dgVoodoo2 as a fallback, clearly marked as a wrapper.
 - Widescreen/HUD/mouse fixes where they are not already covered.
 - Content mods only as opt-in layers.
