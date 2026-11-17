@@ -30,7 +30,7 @@
 
 namespace {
 
-constexpr const wchar_t* kToolVersion = L"1.5.0";
+constexpr const wchar_t* kToolVersion = L"1.6.0";
 constexpr const char* kExpectedExeSha256 =
     "72bbb1ba3e5e5e7dc7607ca403f3d9aca301d0b16814a6b577bda7ec5c922b41";
 constexpr const wchar_t* kGameExe = L"MW4Mercs.exe";
