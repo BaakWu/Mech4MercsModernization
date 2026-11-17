@@ -15,8 +15,13 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
 $installPath = [IO.Path]::GetFullPath($Install)
-$proc = Get-Process MW4Mercs -ErrorAction Stop | Where-Object { $_.MainWindowHandle -ne 0 } |
-    Select-Object -First 1
+# The game process whose hook log exists (the relaunched one), newest first.
+# The window handle is not used: from another Windows session (e.g. SSH) a
+# process's MainWindowHandle reads 0.
+$proc = Get-Process MW4Mercs -ErrorAction Stop |
+    Where-Object { Test-Path -LiteralPath (Join-Path $installPath "mw4hook-$($_.Id).log") } |
+    Sort-Object StartTime -Descending | Select-Object -First 1
+if (-not $proc) { throw 'No MW4Mercs process with a hook log is running.' }
 $log = Join-Path $installPath "mw4hook-$($proc.Id).log"
 if (-not (Test-Path -LiteralPath $log)) { throw "Hook log not found: $log" }
 
