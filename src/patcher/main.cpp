@@ -1593,6 +1593,10 @@ HWND g_folder = nullptr;
 HWND g_status = nullptr;
 HWND g_mw5 = nullptr;
 HWND g_company = nullptr;
+// The folder the optional checkboxes were last set for: a different folder
+// gets its installed choices, or the defaults (unticked) when the patch is
+// not installed there, never the previous folder's.
+std::wstring g_choices_dir;
 HWND g_log = nullptr;
 HWND g_install = nullptr;
 HWND g_uninstall = nullptr;
@@ -1659,11 +1663,16 @@ void UpdateState() {
         }
     }
     SetWindowTextW(g_status, status);
+    const bool new_folder = _wcsicmp(dir.c_str(), g_choices_dir.c_str()) != 0;
     if (g_installed) {
         SendMessageW(g_mw5, BM_SETCHECK, InstalledMw5(dir) == 1 ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(g_company, BM_SETCHECK,
                      InstalledFullCompany(dir) == 1 ? BST_CHECKED : BST_UNCHECKED, 0);
+    } else if (new_folder) {
+        SendMessageW(g_mw5, BM_SETCHECK, BST_UNCHECKED, 0);
+        SendMessageW(g_company, BM_SETCHECK, BST_UNCHECKED, 0);
     }
+    g_choices_dir = dir;
     SetWindowTextW(g_install, g_installed ? L"Update" : L"Install");
     EnableWindow(g_install, g_supported && !g_busy);
     EnableWindow(g_uninstall, g_installed && !g_busy);
@@ -1806,6 +1815,9 @@ HWND Child(const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, i
 }
 
 void CreateControls(const std::wstring& initial_dir, bool initial_mw5, bool initial_company) {
+    // The initial choices belong to the initial folder (passed on an
+    // administrator restart, or read from its install).
+    g_choices_dir = initial_dir;
     std::wstring title =
         std::wstring(L"MechWarrior 4 Mercenaries Modernization Patch (") + kToolVersion + L")";
     Child(L"STATIC", title.c_str(), 0, 16, 14, 580, 26, 0, g_title_font);
