@@ -97,8 +97,20 @@ ignored by GameOS. The window procedure is subclassed only to catch Alt+Enter.
 `Blt` onto the primary surface at the client origin, sized to its render size.
 When that does not match the client area:
 
-- menus/MechLab/movies (shell mode, low frame rate): GDI `StretchBlt` with
-  HALFTONE filtering into the fitted viewport, black bars filled,
+- menus/MechLab/movies (shell mode): a separable **Lanczos-3** upscale
+  (`menu_scaler.cpp`, issue #20).
+  - **How:** the 800x600 frame is copied out of the render surface (one
+    `Lock`), scaled with SSE float arithmetic into a DIB of the viewport size,
+    and drawn 1:1; black bars are filled. Weight tables are rebuilt only when
+    a size changes.
+  - **Result:** text and edges come out noticeably crisper than with GDI's
+    HALFTONE stretch, with no visible ringing on the menu art. The picture
+    itself is unchanged; no detail is added.
+  - **Cost** at 1920x1080 (800x600 → 1440x1080): about 8.5 ms per frame,
+    82–93 fps in the menus, versus 8–13 ms and 62–94 fps for HALFTONE.
+  - **Fallback:** `[frontend] filter=halftone` brings back GDI `StretchBlt`
+    with HALFTONE, which is also used if the frame cannot be read or is not
+    32-bit.
 - missions (full frame rate): DirectDraw's own stretch `Blt` into the viewport
   and color-fill blits for the bars.
 
@@ -413,6 +425,35 @@ MekTek's per-pilot default, Options > Multiplayer > Skin.
   'Mechs get it as above.
 - **Verified:** with "1-Ops - Red" picked, the new pilot's starting Flea
   was red and its MechLab showed "1-Ops - Red".
+
+**Across restarts, and Update.** The pending setup is kept per pilot in
+`mw4hook-pilots.ini` next to the game, so it survives quitting between
+creating a profile and starting it. Uninstall deletes the file. Its
+sections:
+
+| Section | Meaning |
+|---|---|
+| `[new_controls]` | Layout still to apply |
+| `[camo_pending]` | Camouflage code to apply at the pilot's next new 'Mech |
+| `[camo]` | The pilot's chosen camouflage |
+
+Each pilot selection (`ShellSelectPilot`) arms that pilot's entries, and an
+entry is removed once applied.
+
+The Camouflage list also shows in Roster > **Update**. It opens at the
+pilot's recorded choice (option 205; None if there is none). A change
+becomes the pilot's default for 'Mechs it gets from then on, and existing
+'Mechs keep their paint. Leaving the list alone changes nothing, and
+renaming a pilot carries its records over.
+
+Verified:
+
+- A Wolf's Dragoons pilot was created with "1-Ops - Red" and the game quit
+  before starting. After a restart, its starting Cougar was red. The earlier
+  in-memory version lost this on restart, which is how Dragoons came out
+  pink in play testing.
+- Update on that pilot opened at "1-Ops - Red". Changing it to
+  "2-Ops - Gold" queued Gold for its next new 'Mech.
 
 ### Selected resolution
 

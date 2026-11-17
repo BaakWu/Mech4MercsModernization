@@ -936,9 +936,16 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1) {
         backupIni = false;
     }
 
+    // An update keeps the player's display settings (resolution, Windowed);
+    // only a first install sets the known-good 1024x768 / 32-bit keys.
+    const bool updating = FileExists(recordPath);
     Print(L"\nPlan:\n");
-    Print(L"  - %ls display keys -> 1024x768, 32-bit\n",
-          existingOptions ? L"patch" : L"create");
+    if (updating) {
+        Print(L"  - keep the display settings in options.ini (update)\n");
+    } else {
+        Print(L"  - %ls display keys -> 1024x768, 32-bit\n",
+              existingOptions ? L"patch" : L"create");
+    }
     Print(L"  - install %ls (%hs)\n", kHookName, dinputHash.c_str());
     Print(L"  - install %ls (%hs)\n", kDdrawName, ddrawHash.c_str());
     Print(L"  - install %ls\n", kIniName);
@@ -990,12 +997,14 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1) {
     }
 
     std::wstring error;
-    if (!PatchOptionsIni(install, error)) {
-        PrintError(L"error: %ls\n", error.c_str());
-        Rollback(install, state);
-        return 1;
+    if (!updating) {
+        if (!PatchOptionsIni(install, error)) {
+            PrintError(L"error: %ls\n", error.c_str());
+            Rollback(install, state);
+            return 1;
+        }
+        state.optionsPatched = true;
     }
-    state.optionsPatched = true;
 
     const std::wstring dinputTemp = dinputPath + L".mw4patch-new";
     if (!WriteFileAll(dinputTemp, dinput.data(), dinput.size()) ||
@@ -1220,6 +1229,8 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
     if (FileExists(iniPath)) {
         DeleteFileW(iniPath.c_str());
     }
+    // The hook's per-pilot records (new pilots' pending setup, camouflage).
+    DeleteFileW(Join(install, L"mw4hook-pilots.ini").c_str());
     // Hook log files.
     WIN32_FIND_DATAW found{};
     HANDLE find = FindFirstFileW(Join(install, L"mw4hook-*.log").c_str(), &found);

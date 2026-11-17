@@ -21,6 +21,8 @@ constexpr int kMwoThrottleDecay = 202;
 constexpr int kMwoGyroAim = 203;
 // Option id for Join Regiment > Camouflage (set only; issue #19).
 constexpr int kMwoNewPilotCamo = 204;
+// Option id for Roster > Update > Camouflage (the selected pilot's default).
+constexpr int kMwoPilotCamo = 205;
 
 // Logging
 void LogInit(HINSTANCE self);
@@ -92,10 +94,16 @@ void AimAfterDrive(char* controller, double now);
 bool GyroAimEnabled();
 
 // A new pilot's default camouflage (camo.cpp, issue #19).
+// Per-pilot records in mw4hook-pilots.ini (survive restarts): a new pilot's
+// pending controls layout and camouflage, and each pilot's chosen camouflage.
 bool InstallCamoHooks();
-void SetNewPilotCamo();
-void CancelNewPilotCamo();
-void ChooseNewPilotCamo(int index);  // Join Regiment > Camouflage
+void ChoosePilotCamo(int index);                // the dialog's Camouflage list
+void QueueNewPilot(const char* name);            // after ShellCreateNewPilot
+void QueueUpdatedPilotCamo(const char* name);    // after ShellRenamePilot (Update)
+void RenamePilotRecords(const char* from, const char* to);
+bool TakeNewPilotControls(const char* name);     // true once: apply the layout now
+void SetCurrentPilot(const char* name);          // ShellSelectPilot
+int CurrentPilotCamoIndex();
 constexpr int kCamoCount = 52;       // MekTek's MechLab camouflage list
 constexpr int kCamoNone = 51;        // "None" (code '_')
 extern const char* const kCamoNames[kCamoCount];

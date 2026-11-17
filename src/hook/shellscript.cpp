@@ -311,55 +311,61 @@ void InjectGameSwitches(char* data, size_t size) {
 // dialog's own droplist style), with MekTek's camouflage names, starting at
 // [mechlab] default_camo. OK passes the choice to the hook (option id
 // kMwoNewPilotCamo, ShellSetOptionValue = 49) just before the pilot is
-// created; camo.cpp gives the new pilot's 'Mechs that camouflage. OK and
-// Cancel move down 25 pixels to make room (still inside the frame). The
-// list is hidden when the dialog is used to rename a pilot (Update).
+// created; camo.cpp gives the new pilot's 'Mechs that camouflage. In the
+// Update (rename) dialog the list starts at the pilot's last choice
+// (kMwoPilotCamo) and a change becomes its default for new 'Mechs. OK and
+// Cancel move down 25 pixels to make room (still inside the frame).
 void InjectCamoChoice(char* data, size_t size) {
     std::string text(data, size);
     if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
         return;
     }
+    // Written compactly (no optional spaces): the rewritten script must fit
+    // the original buffer.
     char head[200];
     sprintf_s(head,
               "int nCm\r\n"
               "callback($$Shell_CallbackHandler$$,50,%d,nCm)\r\n"
-              "object oCm = s_droplistbox\r\n",
+              "object oCm=s_droplistbox\r\n",
               kMwoNewPilotCamo);
     std::string create = head;
     create +=
-        "oCm.location = 180, 395, 10\r\n"
-        "oCm.boxFont3D = FPATH localize$(IDS_F_GEN_DROPDOWN)\r\n"
-        "oCm.labelFont3D = FPATH localize$(IDS_F_GEN_LABEL)\r\n"
-        "oCm.label = \"Camouflage:\"\r\n"
-        "oCm.offsetLabel = 0, -15\r\n"
-        "oCm.itemWidth = 300 - 16\r\n"
-        "oCm.itemHeight = 20\r\n";
+        "oCm.location=180,395,10\r\n"
+        "oCm.boxFont3D=FPATH localize$(IDS_F_GEN_DROPDOWN)\r\n"
+        "oCm.labelFont3D=FPATH localize$(IDS_F_GEN_LABEL)\r\n"
+        "oCm.label=\"Camouflage:\"\r\n"
+        "oCm.offsetLabel=0,-15\r\n"
+        "oCm.itemWidth=284\r\n"
+        "oCm.itemHeight=20\r\n";
     char sizes[160];
-    sprintf_s(sizes, "oCm.list_size = %d\r\noCm.max_displayed = 6\r\n", kCamoCount);
+    sprintf_s(sizes, "oCm.list_size=%d\r\noCm.max_displayed=6\r\n", kCamoCount);
     create += sizes;
     for (int i = 0; i < kCamoCount; ++i) {
         char line[96];
-        sprintf_s(line, "oCm.list_item[%d] = \"%s\"\r\n", i, kCamoNames[i]);
+        sprintf_s(line, "oCm.list_item[%d]=\"%s\"\r\n", i, kCamoNames[i]);
         create += line;
     }
-    // Open the list with the default in view (6 rows shown).
-    const int default_index = CamoIndex(GetConfig().default_camo);
-    char select[120];
-    sprintf_s(select, "oCm.nSelected = nCm\r\noCm.top_of_list = %d\r\ninitialize(oCm)\r\n",
-              default_index > 5 ? default_index - 5 : 0);
-    create += select;
-    char set[160];
-    sprintf_s(set,
-              "nCm = oCm.nselected\r\n"
-              "callback($$Shell_CallbackHandler$$,49,%d,nCm)\r\n",
+    create += "oCm.nSelected=nCm\r\ninitialize(oCm)\r\n";
+    // Update (rename) dialog: start at the selected pilot's camouflage.
+    char update_init[200];
+    sprintf_s(update_init,
+              "if (useUpdateTitleString)\r\n{\r\n"
+              "callback($$Shell_CallbackHandler$$,50,%d,nCm)\r\n"
+              "oCm.nSelected=nCm\r\n}\r\n"
+              "initialize(oCm)\r\n",
+              kMwoPilotCamo);
+    char set_new[120];
+    sprintf_s(set_new, "nCm=oCm.nselected\r\ncallback($$Shell_CallbackHandler$$,49,%d,nCm)\r\n",
               kMwoNewPilotCamo);
+    char set_update[120];
+    sprintf_s(set_update, "nCm=oCm.nselected\r\ncallback($$Shell_CallbackHandler$$,49,%d,nCm)\r\n",
+              kMwoPilotCamo);
 
     bool ok = InsertAfterLine(&text, "initialize(DifficultyListBox)", create);
-    ok = ok && InsertAfterLine(&text, "initialize( DifficultyListBox )",
-                               "initialize(oCm)\r\n"
-                               "if (useUpdateTitleString)\r\n{\r\ndeactivate(oCm)\r\n}\r\n");
+    ok = ok && InsertAfterLine(&text, "initialize( DifficultyListBox )", update_init);
     ok = ok && InsertAfterLine(&text, "deactivate( DifficultyListBox )", "deactivate(oCm)\r\n");
-    ok = ok && InsertBeforeLine(&text, "int create_flag = callback(", 0, set);
+    ok = ok && InsertBeforeLine(&text, "int create_flag = callback(", 0, set_new);
+    ok = ok && InsertBeforeLine(&text, "int rename_flag = callback(", 0, set_update);
     // OK / Cancel: 395 -> 420 (the frame ends at 450).
     for (const char* button : {"180, 395, 10", "480, 395, 10"}) {
         const size_t at = text.find(button);

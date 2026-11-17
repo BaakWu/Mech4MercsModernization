@@ -37,6 +37,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace mw4hook {
 namespace {
@@ -48,6 +49,7 @@ constexpr int kShellGetOptionValue = 50;
 constexpr int kShellSaveOptions = 51;
 constexpr int kShellCreateNewPilot = 18;
 constexpr int kShellSelectPilot = 19;
+constexpr int kShellRenamePilot = 21;
 constexpr int kResolutionCount = 29;
 
 using SetScreenMode_t = void(__stdcall*)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
@@ -171,10 +173,6 @@ void ApplyDisplay() {
                        *g_arg7, 0, 0, 0, 0, 0);
 }
 
-// A new pilot whose controls still need a real layout (see below).
-char g_new_pilot[64] = {};
-// A new pilot whose default camouflage is still pending (camo.cpp).
-char g_camo_pilot[64] = {};
 
 // A script string argument: a pointer to the characters, or to a pointer to
 // them. Returns nullptr if neither reads as a short printable string.
@@ -243,11 +241,15 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
             }
             return 1;
         }
-        if (option == kMwoNewPilotCamo) {
+        if (option == kMwoNewPilotCamo || option == kMwoPilotCamo) {
+            // Join Regiment's Camouflage list: 204 = new pilot (starts at the
+            // default), 205 = Update of the selected pilot (starts at its
+            // last choice).
+            const bool update = option == kMwoPilotCamo;
             if (cmd == kShellSetOptionValue) {
-                ChooseNewPilotCamo(*value);
+                ChoosePilotCamo(*value);
             } else {
-                *value = CamoIndex(GetConfig().default_camo);
+                *value = update ? CurrentPilotCamoIndex() : CamoIndex(GetConfig().default_camo);
             }
             return 1;
         }
@@ -313,36 +315,41 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
         PersistWindowed();
     }
     if (cmd == kShellCreateNewPilot && result >= 0) {
-        // A new pilot starts from MekTek's template profile, whose control
-        // list shows a WASD layout that is not what loads for play (the
-        // mission uses MW4's factory keys). Remember the pilot; when it is
-        // selected (START / the roster list), give it a real layout below.
-        // Doing it here, while the pilot is being created, hangs the game.
+        // A new pilot starts from MekTek's template profile: its control list
+        // shows a WASD layout that is not what loads for play (the mission
+        // uses MW4's factory keys), and its skin is Pink. Record the pilot
+        // (mw4hook-pilots.ini, so it survives a restart); when it is selected
+        // (START / the roster list) it gets a real layout below, and its
+        // camouflage when its first 'Mech is created (camo.cpp). Applying the
+        // layout here, while the pilot is being created, hangs the game.
         const char* name = ScriptString(args[1]);
-        strncpy_s(g_new_pilot, name ? name : "", _TRUNCATE);
-        Log("controls: new pilot '%s' created\n", g_new_pilot);
-    }
-    if (cmd == kShellSelectPilot && g_camo_pilot[0]) {
-        // A pending default camouflage belongs to the new pilot only.
-        const char* name = ScriptString(args[1]);
-        if (!name || _stricmp(name, g_camo_pilot) != 0) {
-            CancelNewPilotCamo();
-            g_camo_pilot[0] = '\0';
+        if (name) {
+            QueueNewPilot(name);
+            Log("controls: new pilot '%s' created\n", name);
         }
     }
-    if (cmd == kShellSelectPilot && g_new_pilot[0]) {
+    if (cmd == kShellRenamePilot && result >= 0) {
+        // Roster > Update: the pilot may have a new name, and the
+        // Camouflage list sets its default for 'Mechs it gets from now on.
+        const char* old_name = ScriptString(args[1]);
+        const char* new_name = ScriptString(args[2]);
+        if (old_name && new_name) {
+            std::string from = old_name;  // the script's buffers, read before use
+            std::string to = new_name;
+            RenamePilotRecords(from.c_str(), to.c_str());
+            QueueUpdatedPilotCamo(to.c_str());
+        }
+    }
+    if (cmd == kShellSelectPilot) {
         const char* name = ScriptString(args[1]);
-        Log("controls: pilot '%s' selected\n", name ? name : "?");
-        if (name && _stricmp(name, g_new_pilot) == 0) {
+        SetCurrentPilot(name ? name : "");
+        if (name && TakeNewPilotControls(name)) {
             // As DEFAULT + OK in Options > Controls: MW4's layout, or with
             // [controls] mw5=1 the MW5 layout with the mouse on the torso;
             // then save the pilot's options.
-            g_new_pilot[0] = '\0';
             int set_default[1] = {100};
             g_shell_callback(a1, a2, set_default);
             ApplyMw5Layout(g_shell_callback, a1, a2, false);
-            SetNewPilotCamo();  // the template's skin is Pink; see camo.cpp
-            strncpy_s(g_camo_pilot, name, _TRUNCATE);
             int save[1] = {kShellSaveOptions};
             Hook_ShellCallback(a1, a2, save);
             Log("controls: new pilot '%s': %s layout applied and saved\n", name,

@@ -26,6 +26,10 @@
 //   MechLab (chassis.script): '0'..'9', 'a'..'z', '!', '^', ... and '_' = None.
 #include "hook.h"
 
+#include <cstdio>
+#include <cstring>
+#include <string>
+
 namespace mw4hook {
 
 // MekTek's camouflage list as MechLab shows it (chassis.script). A skin's
@@ -56,6 +60,8 @@ char CamoCode(int index) {
     return index == kCamoNone ? '_' : kCamoNames[index][0];
 }
 
+char CamoCode(int index);
+
 int CamoIndex(char code) {
     for (int i = 0; i < kCamoCount; ++i) {
         if (CamoCode(i) == code) {
@@ -67,14 +73,59 @@ int CamoIndex(char code) {
 
 namespace {
 
-volatile LONG g_pending = 0;  // the current pilot is new: set its camouflage
-volatile LONG g_chosen = 0;   // camouflage picked in Join Regiment (code), 0 = none
-volatile LONG g_code = 0;     // the code to give the pending pilot
+volatile LONG g_pending = 0;  // the current pilot has a camouflage to apply
+volatile LONG g_chosen = 0;   // camouflage picked in the dialog (code), 0 = none
+volatile LONG g_code = 0;     // the code to give the current pilot
+char g_current[64] = {};      // the selected pilot (ShellSelectPilot)
+volatile LONG g_update_initial = 0;  // code the Update dialog's list opened with
 void* g_trampoline[2] = {};
+
+// mw4hook-pilots.ini next to the game (removed by uninstall):
+//   [new_controls] <pilot>=1      layout still to apply (new pilot)
+//   [camo_pending] <pilot>=<code> camouflage to apply at its next new 'Mech
+//   [camo]         <pilot>=<code> the pilot's chosen camouflage (for Update)
+// Codes are stored as numbers (several are ini punctuation: [ ] # ...).
+const wchar_t* RecordsPath() {
+    static wchar_t path[MAX_PATH] = {};
+    if (!path[0]) {
+        DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+        wchar_t* slash = len ? wcsrchr(path, L'\\') : nullptr;
+        if (slash) {
+            wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"mw4hook-pilots.ini");
+        }
+    }
+    return path;
+}
+
+std::wstring Wide(const char* text) {
+    wchar_t buffer[128] = {};
+    MultiByteToWideChar(CP_ACP, 0, text, -1, buffer, 128);
+    return buffer;
+}
+
+int ReadRecord(const wchar_t* section, const char* pilot) {
+    return static_cast<int>(
+        GetPrivateProfileIntW(section, Wide(pilot).c_str(), 0, RecordsPath()));
+}
+
+void WriteRecord(const wchar_t* section, const char* pilot, int value) {
+    wchar_t text[16];
+    swprintf_s(text, L"%d", value);
+    WritePrivateProfileStringW(section, Wide(pilot).c_str(), value ? text : nullptr,
+                               RecordsPath());
+}
 
 // Called from the stubs with the pilot's skin holder (ecx); all registers
 // are preserved around it.
 void __cdecl OnSkinRead(unsigned char* holder) {
+    if (GetConfig().debug_automation) {
+        static int logged = 0;
+        if (logged < 40) {
+            ++logged;
+            Log("camo: skin read (pending %ld, holder %p, skin '%c')\n", g_pending, holder,
+                holder && !IsBadReadPtr(holder + 0x30, 1) ? holder[0x30] : '?');
+        }
+    }
     if (!g_pending || !holder) {
         return;
     }
@@ -83,9 +134,10 @@ void __cdecl OnSkinRead(unsigned char* holder) {
     __try {
         const unsigned char before = holder[0x30];
         holder[0x30] = static_cast<unsigned char>(code);
-        Log("camo: new pilot's default camouflage '%c' (was '%c')\n", code, before);
+        Log("camo: %s's default camouflage '%c' (was '%c')\n", g_current, code, before);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    WriteRecord(L"camo_pending", g_current, 0);  // done
 }
 
 __declspec(naked) void Stub0() {
@@ -118,31 +170,87 @@ bool g_installed = false;
 
 }  // namespace
 
-// Join Regiment's Camouflage list (option id kMwoNewPilotCamo, set just
-// before the pilot is created).
-void ChooseNewPilotCamo(int index) {
+// The dialog's Camouflage list (option 204 new pilot / 205 Update), set just
+// before the pilot is created or renamed.
+void ChoosePilotCamo(int index) {
     const char code = CamoCode(index);
     InterlockedExchange(&g_chosen, static_cast<unsigned char>(code));
-    Log("camo: Join Regiment camouflage %d '%s'\n", index,
-        code ? kCamoNames[index] : "?");
+    Log("camo: dialog camouflage %d '%s'\n", index, code ? kCamoNames[index] : "?");
 }
 
-// The current pilot was just created: give it its camouflage (the one picked
-// in Join Regiment, else [mechlab] default_camo) when its first 'Mech is
-// created.
-void SetNewPilotCamo() {
+// A pilot was just created: its layout is applied on its next selection, its
+// camouflage (the dialog's, else [mechlab] default_camo) on its next new
+// 'Mech -- also after a restart.
+void QueueNewPilot(const char* name) {
     const char chosen = static_cast<char>(InterlockedExchange(&g_chosen, 0));
     const char code = chosen ? chosen : GetConfig().default_camo;
-    if (!code) {
-        Log("camo: default_camo is empty; new pilot keeps the template's skin\n");
-        return;
+    WriteRecord(L"new_controls", name, 1);
+    if (code) {
+        WriteRecord(L"camo_pending", name, static_cast<unsigned char>(code));
+        WriteRecord(L"camo", name, static_cast<unsigned char>(code));
     }
-    InterlockedExchange(&g_code, static_cast<unsigned char>(code));
-    InterlockedExchange(&g_pending, 1);
 }
 
-// Any pilot selection: a pending default belongs to the pilot that was new.
-void CancelNewPilotCamo() { InterlockedExchange(&g_pending, 0); }
+// Roster > Update: the chosen camouflage becomes the pilot's default for the
+// 'Mechs it gets from now on (its existing 'Mechs keep their paint).
+void QueueUpdatedPilotCamo(const char* name) {
+    const char chosen = static_cast<char>(InterlockedExchange(&g_chosen, 0));
+    const char initial = static_cast<char>(InterlockedExchange(&g_update_initial, 0));
+    if (!chosen || chosen == initial) {
+        return;  // the list was not changed
+    }
+    WriteRecord(L"camo_pending", name, static_cast<unsigned char>(chosen));
+    WriteRecord(L"camo", name, static_cast<unsigned char>(chosen));
+    Log("camo: %s: camouflage '%c' for new 'Mechs\n", name, chosen);
+    if (_stricmp(name, g_current) == 0) {
+        SetCurrentPilot(name);  // re-arm for the selected pilot
+    }
+}
+
+void RenamePilotRecords(const char* from, const char* to) {
+    if (_stricmp(from, to) == 0) {
+        return;
+    }
+    for (const wchar_t* section : {L"new_controls", L"camo_pending", L"camo"}) {
+        const int value = ReadRecord(section, from);
+        if (value) {
+            WriteRecord(section, to, value);
+            WriteRecord(section, from, 0);
+        }
+    }
+    if (_stricmp(from, g_current) == 0) {
+        strncpy_s(g_current, to, _TRUNCATE);
+    }
+}
+
+bool TakeNewPilotControls(const char* name) {
+    if (!ReadRecord(L"new_controls", name)) {
+        return false;
+    }
+    WriteRecord(L"new_controls", name, 0);
+    return true;
+}
+
+// The selected pilot: arm its pending camouflage, if any. Only this pilot's
+// 'Mechs are created until another pilot is selected.
+void SetCurrentPilot(const char* name) {
+    strncpy_s(g_current, name, _TRUNCATE);
+    const int code = name[0] ? ReadRecord(L"camo_pending", name) : 0;
+    InterlockedExchange(&g_code, code);
+    InterlockedExchange(&g_pending, code ? 1 : 0);
+    if (code) {
+        Log("camo: %s: camouflage '%c' pending for its next new 'Mech\n", name,
+            static_cast<char>(code));
+    }
+}
+
+int CurrentPilotCamoIndex() {
+    const int code = g_current[0] ? ReadRecord(L"camo", g_current) : 0;
+    const int index = CamoIndex(code ? static_cast<char>(code) : GetConfig().default_camo);
+    // What the Update dialog opened with: leaving it alone changes nothing.
+    InterlockedExchange(&g_update_initial, static_cast<unsigned char>(CamoCode(index)));
+    return index;
+}
 
 bool InstallCamoHooks() {
     if (g_installed) {

@@ -31,9 +31,15 @@ Install/uninstall run on a worker thread; the result is shown in a message
 box. If the folder is not writable (Program Files), the installer offers to
 restart itself elevated (`runas`, passing `--dir "<folder>"` and `--mw5`).
 
-**Update** re-runs install over an existing install: the hook files are
-replaced (not backed up, since they are ours), the MW5 choice is applied, and
-the player's Throttle Decay value from the installed `mw4hook.ini` is kept.
+**Update** re-runs install over an existing install:
+
+- The hook files are replaced (not backed up, since they are ours), and the
+  MW5 choice is applied.
+- The player's Throttle Decay, Gyro Aim and aim settings from the installed
+  `mw4hook.ini` are kept.
+- The display settings in `options.ini` are left alone. Only a first install
+  writes the 1024x768 / 32-bit / Windowed keys; before 1.4 every update reset
+  the resolution.
 
 ## What it does
 

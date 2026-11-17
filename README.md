@@ -30,8 +30,9 @@ default; the throttle eases back to zero when W/S is released).
 
 New pilots get working controls and a **camouflage of your choice**: Roster >
 New > Join Regiment has a Camouflage list (default None). MekTek's template
-profile gave every new unit "7-Ops - Pink" (issue #19). A pilot's default
-camouflage can be changed later on Options > Multiplayer > Skin.
+profile gave every new unit "7-Ops - Pink" (issue #19). Roster > Update
+changes a pilot's camouflage for the 'Mechs it gets from then on (as does
+Options > Multiplayer > Skin).
 
 Optional, chosen in the installer: **MechWarrior 5-style controls**:
 
