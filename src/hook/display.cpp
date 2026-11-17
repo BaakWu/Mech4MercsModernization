@@ -46,6 +46,8 @@ constexpr int kMwoUseExtendedVisibility = 34;
 constexpr int kShellSetOptionValue = 49;
 constexpr int kShellGetOptionValue = 50;
 constexpr int kShellSaveOptions = 51;
+constexpr int kShellCreateNewPilot = 18;
+constexpr int kShellSelectPilot = 19;
 constexpr int kResolutionCount = 29;
 
 using SetScreenMode_t = void(__stdcall*)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
@@ -169,6 +171,42 @@ void ApplyDisplay() {
                        *g_arg7, 0, 0, 0, 0, 0);
 }
 
+// A new pilot whose controls still need a real layout (see below).
+char g_new_pilot[64] = {};
+
+// A script string argument: a pointer to the characters, or to a pointer to
+// them. Returns nullptr if neither reads as a short printable string.
+const char* ScriptString(int arg) {
+    auto printable = [](const char* s) {
+        if (!s || IsBadReadPtr(s, 1)) {
+            return false;
+        }
+        for (int i = 0; i < 64; ++i) {
+            if (IsBadReadPtr(s + i, 1)) {
+                return false;
+            }
+            if (s[i] == '\0') {
+                return i > 0;
+            }
+            if (static_cast<unsigned char>(s[i]) < 0x20) {
+                return false;
+            }
+        }
+        return false;
+    };
+    const char* direct = reinterpret_cast<const char*>(arg);
+    if (printable(direct)) {
+        return direct;
+    }
+    if (arg > 0x10000 && !IsBadReadPtr(direct, 4)) {
+        const char* indirect = *reinterpret_cast<const char* const*>(direct);
+        if (printable(indirect)) {
+            return indirect;
+        }
+    }
+    return nullptr;
+}
+
 int CallOriginal(DWORD a1, DWORD a2, int cmd, int option, int* value) {
     int args[3] = {cmd, option, reinterpret_cast<int>(value)};
     return g_shell_callback(a1, a2, args);
@@ -255,6 +293,33 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
         // which disagrees with the dropdown for some entries. Write ours last.
         PersistResolution();
         PersistWindowed();
+    }
+    if (cmd == kShellCreateNewPilot && result >= 0) {
+        // A new pilot starts from MekTek's template profile, whose control
+        // list shows a WASD layout that is not what loads for play (the
+        // mission uses MW4's factory keys). Remember the pilot; when it is
+        // selected (START / the roster list), give it a real layout below.
+        // Doing it here, while the pilot is being created, hangs the game.
+        const char* name = ScriptString(args[1]);
+        strncpy_s(g_new_pilot, name ? name : "", _TRUNCATE);
+        Log("controls: new pilot '%s' created\n", g_new_pilot);
+    }
+    if (cmd == kShellSelectPilot && g_new_pilot[0]) {
+        const char* name = ScriptString(args[1]);
+        Log("controls: pilot '%s' selected\n", name ? name : "?");
+        if (name && _stricmp(name, g_new_pilot) == 0) {
+            // As DEFAULT + OK in Options > Controls: MW4's layout, or with
+            // [controls] mw5=1 the MW5 layout with the mouse on the torso;
+            // then save the pilot's options.
+            g_new_pilot[0] = '\0';
+            int set_default[1] = {100};
+            g_shell_callback(a1, a2, set_default);
+            ApplyMw5Layout(g_shell_callback, a1, a2, false);
+            int save[1] = {kShellSaveOptions};
+            Hook_ShellCallback(a1, a2, save);
+            Log("controls: new pilot '%s': %s layout applied and saved\n", name,
+                GetConfig().controls_mw5 ? "MW5" : "MW4");
+        }
     }
     return result;
 }

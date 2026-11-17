@@ -114,6 +114,9 @@ void __fastcall Hook_Drive(char* self, void*, double now) {
     *reinterpret_cast<float*>(self + kStoredThrottle) = t;
     g_last_written = t;
     g_have_last = true;
+
+    // Mouse aim point (aim.cpp): after the game's torso keys and centering.
+    AimAfterDrive(self, now);
 }
 
 // One binding: a row of the Options > Controls list (3.1c order), a key
@@ -180,17 +183,94 @@ const Binding kMw5Layout[] = {
 
 bool g_installed = false;
 
+// The core of ShellControlAssignValue for a keyboard key, called directly.
+// The script call also mails the Options > Controls screen to redraw the
+// row; with that screen closed (a new pilot, in the Roster) the game tries
+// to load it in the middle of the callback and hangs. Everything is taken
+// from the handler's own instructions (3.1c 0x0051AFC8, "sar edx,8; cmp
+// edx,1Bh; jz"):
+//   +0x4A  mov eax,[ptr]   +0x4F mov esi,[key]   player = [[ptr]^[key]+2Ch]^K
+//   +0x5F  xor ecx,K       +0x66 mov ecx,[controls]   +0x6C call core
+// core(thiscall controls; player, row, vk, modifier flags).
+using AssignCore_t = int(__thiscall*)(void*, int, int, int, int);
+struct AssignSite {
+    bool searched = false;
+    AssignCore_t core = nullptr;
+    void** controls = nullptr;
+    DWORD** player_ptr = nullptr;
+    DWORD* player_key = nullptr;
+    DWORD player_offset = 0;
+    DWORD player_xor = 0;
+} g_assign;
+
+bool FindAssignSite() {
+    if (g_assign.searched) {
+        return g_assign.core != nullptr;
+    }
+    g_assign.searched = true;
+    unsigned char* p = FindUnique("assign_key", "C1 FA 08 83 FA 1B 0F 84");
+    if (!p || p[0x4A] != 0xA1 || p[0x4F] != 0x8B || p[0x50] != 0x35 || p[0x5C] != 0x8B ||
+        p[0x5D] != 0x48 || p[0x5F] != 0x81 || p[0x60] != 0xF1 || p[0x66] != 0x8B ||
+        p[0x67] != 0x0D || p[0x6C] != 0xE8) {
+        Log("controls: key assignment site not recognised\n");
+        return false;
+    }
+    g_assign.player_ptr = *reinterpret_cast<DWORD***>(p + 0x4B);
+    g_assign.player_key = *reinterpret_cast<DWORD**>(p + 0x51);
+    g_assign.player_offset = p[0x5E];
+    g_assign.player_xor = *reinterpret_cast<DWORD*>(p + 0x61);
+    g_assign.controls = *reinterpret_cast<void***>(p + 0x68);
+    g_assign.core = reinterpret_cast<AssignCore_t>(p + 0x71 + *reinterpret_cast<LONG*>(p + 0x6D));
+    return true;
+}
+
+// Modifier key -> the game's flag (as the handler maps it).
+int ModifierFlag(int vk) {
+    switch (vk) {
+        case VK_SHIFT: return 2;
+        case VK_CONTROL: return 4;
+        case VK_MENU: return 0x10;
+        default: return 1;
+    }
+}
+
+bool AssignKeyDirect(int row, int vk, int modifier) {
+    if (!FindAssignSite()) {
+        return false;
+    }
+    __try {
+        const DWORD object = **g_assign.player_ptr ^ *g_assign.player_key;
+        const int player = static_cast<int>(
+            *reinterpret_cast<DWORD*>(object + g_assign.player_offset) ^ g_assign.player_xor);
+        g_assign.core(*g_assign.controls, player, row, vk, ModifierFlag(modifier));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 }  // namespace
 
 // Called by the options callback hook after ShellControlSetDefault (the
 // Controls screen's DEFAULT button) with the same script context. Assigns the
 // MW5-style layout through ShellControlAssignValue (101).
-void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWORD a2) {
+void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWORD a2,
+                    bool screen_open) {
     if (!GetConfig().controls_mw5 || !callback) {
         return;
     }
     int applied = 0;
     for (const Binding& b : kMw5Layout) {
+        if (!screen_open) {
+            // Outside Options > Controls: the game's assignment without the
+            // screen redraw (see AssignKeyDirect).
+            if (!AssignKeyDirect(b.row, b.vk, b.modifier)) {
+                Log("controls: MW5 layout not applied (assignment failed at row %d)\n", b.row);
+                return;
+            }
+            ++applied;
+            continue;
+        }
         int row = b.row;
         int column = 1;  // keyboard
         int key = b.vk << 8;

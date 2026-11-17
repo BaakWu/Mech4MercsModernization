@@ -92,6 +92,7 @@ DWORD WINAPI HookThread(LPVOID) {
     bool display_done = !config.hooks_enabled || !config.display_enabled;
     bool script_done = !config.hooks_enabled || !config.checkbox_enabled;
     bool controls_done = !config.hooks_enabled;
+    bool aim_done = !config.hooks_enabled;
     // The packed image is unpacked by the time imports are resolved, but
     // retry briefly in case a pattern is not readable yet.
     for (int i = 0; i < 300; ++i) {
@@ -103,6 +104,9 @@ DWORD WINAPI HookThread(LPVOID) {
         }
         if (!controls_done) {
             controls_done = mw4hook::InstallControlsHooks();
+        }
+        if (!aim_done) {
+            aim_done = mw4hook::InstallAimHooks();
         }
         mw4hook::InstallHooks();
         Sleep(10);

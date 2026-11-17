@@ -12,6 +12,7 @@
 //   move  <x> <y>       client coordinates (physical pixels)
 //   smove <x> <y>       800x600 shell coordinates, scaled to the client
 //   click               left button down for ~150 ms, then up
+//   mouse <dx> <dy> [ms] relative mouse motion (mickeys) spread over ms
 //   key   <vk>          press a virtual key (decimal or 0x hex)
 //   activate            post WM_ACTIVATEAPP/WM_ACTIVATE to the game window
 //   setwindowed <0|1>   call the Windowed backend directly (diagnostics)
@@ -39,6 +40,17 @@ POINT g_cursor = {0, 0};        // virtual cursor, client coordinates
 volatile LONG g_button_until = 0;
 volatile LONG g_key_until = 0;
 volatile LONG g_key_code = 0;
+
+// Relative mouse motion ("mouse dx dy ms"), spread evenly over the duration
+// and handed out through the DirectInput mouse state.
+struct MouseMotion {
+    DWORD start = 0;
+    DWORD duration = 0;
+    LONG total_x = 0;
+    LONG total_y = 0;
+    LONG sent_x = 0;
+    LONG sent_y = 0;
+} g_motion;
 
 std::wstring GameDirFile(const wchar_t* name) {
     wchar_t path[MAX_PATH];
@@ -154,6 +166,22 @@ void Execute(const std::string& line) {
             PostMessageA(hwnd, WM_KEYUP, vk, 1 | (scan << 16) | 0xC0000000);
         }
         Sleep(150);
+    } else if (_stricmp(verb, "mouse") == 0) {
+        // Relative mouse motion in mickeys, spread over <ms> (default 0 =
+        // the next poll). Returns once it has been delivered.
+        int dx = 0;
+        int dy = 0;
+        int ms = 0;
+        sscanf_s(rest, "%d %d %d", &dx, &dy, &ms);
+        EnterCriticalSection(&g_lock);
+        g_motion.start = GetTickCount();
+        g_motion.duration = static_cast<DWORD>(ms > 0 ? ms : 0);
+        g_motion.total_x = dx;
+        g_motion.total_y = dy;
+        g_motion.sent_x = 0;
+        g_motion.sent_y = 0;
+        LeaveCriticalSection(&g_lock);
+        Sleep(static_cast<DWORD>(ms > 0 ? ms : 0) + 100);
     } else if (_stricmp(verb, "keydown") == 0 || _stricmp(verb, "keyup") == 0) {
         // Hold or release a key (e.g. Shift) around other commands.
         const UINT vk = static_cast<UINT>(strtol(rest, nullptr, 0));
@@ -320,9 +348,26 @@ void AutomationFilterDeviceState(DWORD size, void* data, HRESULT* result) {
         }
         auto* buttons = static_cast<unsigned char*>(data) + 12;
         buttons[0] = Due(&g_button_until) ? 0x80 : 0x00;
-        // The virtual cursor is absolute; suppress real relative motion.
-        static_cast<LONG*>(data)[0] = 0;
-        static_cast<LONG*>(data)[1] = 0;
+        // The virtual cursor is absolute; real relative motion is suppressed
+        // and replaced by the scripted "mouse" motion, if any.
+        LONG x = 0;
+        LONG y = 0;
+        EnterCriticalSection(&g_lock);
+        if (g_motion.sent_x != g_motion.total_x || g_motion.sent_y != g_motion.total_y) {
+            const DWORD elapsed = GetTickCount() - g_motion.start;
+            const double f = g_motion.duration == 0 || elapsed >= g_motion.duration
+                                 ? 1.0
+                                 : static_cast<double>(elapsed) / g_motion.duration;
+            const LONG want_x = static_cast<LONG>(g_motion.total_x * f);
+            const LONG want_y = static_cast<LONG>(g_motion.total_y * f);
+            x = want_x - g_motion.sent_x;
+            y = want_y - g_motion.sent_y;
+            g_motion.sent_x = want_x;
+            g_motion.sent_y = want_y;
+        }
+        LeaveCriticalSection(&g_lock);
+        static_cast<LONG*>(data)[0] = x;
+        static_cast<LONG*>(data)[1] = y;
     } else if (size == 256) {
         if (FAILED(*result)) {
             memset(data, 0, size);

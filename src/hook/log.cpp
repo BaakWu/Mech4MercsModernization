@@ -2,6 +2,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace mw4hook {
@@ -58,6 +59,12 @@ void LoadConfig() {
         GetPrivateProfileIntW(L"debug", L"automation", 0, path) != 0;
     g_config.controls_mw5 = GetPrivateProfileIntW(L"controls", L"mw5", 0, path) != 0;
     g_config.throttle_decay = GetPrivateProfileIntW(L"controls", L"decay", 0, path) != 0;
+    g_config.aim_track_pointer = GetPrivateProfileIntW(L"aim", L"track_pointer", 0, path) != 0;
+    wchar_t value[32] = {};
+    GetPrivateProfileStringW(L"aim", L"sensitivity", L"1.0", value, 32, path);
+    const float sensitivity = static_cast<float>(_wtof(value));
+    g_config.aim_sensitivity = (sensitivity > 0.05f && sensitivity < 20.0f) ? sensitivity : 1.0f;
+    g_config.aim_marker = GetPrivateProfileIntW(L"aim", L"marker", 1, path) != 0;
 }
 
 }  // namespace

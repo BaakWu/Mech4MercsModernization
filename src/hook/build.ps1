@@ -29,6 +29,7 @@ $OutDir = [IO.Path]::GetFullPath($OutDir)
 $sources = @(
     'automation.cpp',
     'controls.cpp',
+    'aim.cpp',
     'cursor.cpp',
     'detour.cpp',
     'dinput_proxy.cpp',

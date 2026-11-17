@@ -217,6 +217,30 @@ The same step turns the mouse on and puts the Mouse X Axis on the torso, as
 in MW5 (`SetMouse` 213 = 1, `SetMouseXAxis` 225 = 2; that list is 0 None,
 1 Turning, 2 Torso). MW4's factory default leaves the mouse X axis on None.
 
+**New pilots.** A pilot created in the Roster starts from MekTek's template
+profile. Its Controls list shows a WASD layout, but a mission plays with
+MW4's factory keys (W/S do nothing, `=` accelerates). That reproduces in the
+stock game, and Options > OK alone does not fix it. The hook remembers a
+pilot created with `ShellCreateNewPilot` (18). When that pilot is next
+selected (`ShellSelectPilot` 19, called by START and the roster list), it
+applies the layout and saves (`ShellSaveOptions` 51), as DEFAULT + OK would:
+MW4's layout, or with `mw5=1` the MW5 layout plus mouse on / X axis = Torso.
+
+Two traps found along the way:
+
+- Calling the layout during creation itself hangs the game.
+- `ShellControlAssignValue` mails the Options > Controls screen
+  (`OM_Controls`) to redraw the row; with that screen closed, the game tries
+  to load it in the middle of the callback and hangs. Outside the screen the
+  hook calls the handler's core directly instead (`0x004FCA50`, thiscall on
+  the controls object; pilot index, row, virtual key, modifier flag 1 / 2 /
+  4 / 0x10). All of it is read from the handler's own instructions (pattern
+  `C1 FA 08 83 FA 1B 0F 84` at `0x0051AFC8`); nothing is hard-coded and no
+  code is changed.
+
+Verified: a new pilot in Instant Action accelerates with W and stops with X.
+The mouse setters (213, 225) do not touch the screen and are called normally.
+
 Everything else keeps MW4's factory key (Center Legs To Torso Shift+Space,
 chat Y/U, lance orders F1–F10, group toggles Shift+1–6, `[`/`]`, V view).
 The Controls list names keys by scan code, so the arrow keys are shown as
@@ -226,6 +250,83 @@ Verified in the campaign mission Tharkad - Checkmate: X stops, Numpad 5 = 50%,
 Numpad 0 = 100%, P shuts down and starts up, W/S rates as above; with Throttle
 Decay on, full forward and full reverse ease to 0 after release, a Numpad 5
 preset holds, and a W tap from it decays again.
+
+### Mouse aim point (`[aim] track_pointer=1`, part of the MW5 controls; issue #15)
+
+It is installed together with the MW5-style controls: the installer sets
+`track_pointer` to the same choice as `mw5`. There is no in-game switch.
+
+**Stock behavior.** The mouse sets a torso turn *speed*. The per-frame mouse
+step (`0x0054EDA0`) adds each frame's motion × sensitivity (`+0x17C`) to an
+accumulator (`+0x554` X, `+0x558` Y, clamped to ±1). That accumulator is
+the torso rate command, and it drains by `clamp(acc, ±maxchange) × 4 × dt`,
+but by at least `minchange` per frame (`options.ini [mouse] minchange=0.015 /
+maxchange=0.75`). So:
+
+- the torso keeps turning after the mouse stops (the accumulator empties
+  over time),
+- fast motion saturates at ±1, so a flick lands short,
+- the minimum drain is per frame, so at 150 fps small movements disappear
+  about 5× faster than at 30 fps (issue #3).
+
+**With `track_pointer`.** The mouse moves an **aim point**: an angle from
+the legs, in radians, resolution independent. In aim mode the mouse step's
+motion is taken and the stock accumulators are kept at 0. After the drive
+step (which computes the torso keys and auto-centering), the hook:
+
+- moves the aim point by motion × sensitivity × 0.116 rad per slider unit
+  (`[aim] sensitivity` multiplies it), in the same directions as the stock
+  mouse, including the game's Y invert;
+- clamps it to the mech's own twist and pitch limits (`mech+0x76C`,
+  `mech+0x7C8`; ±80° / ±30° on the test mech), so it **stops at the limit**
+  and nothing piles up beyond it;
+- steers the torso (`+0x2E4` yaw, `+0x2E0` pitch) with
+  `clamp((target - angle) / (rate × τ), ±1)`. That is full rate while far
+  away, then proportional, so there is no overshoot. τ = max(2 frames, 60 ms).
+  `rate` is learned per axis from the torso's response (the measured twist
+  rate was 0.78 rad/s and pitch 0.64 rad/s on the test mech), which also
+  absorbs the game's zoom speed modifiers.
+
+It works with the game's other torso controls:
+
+- **Auto-centering** (`options.ini [special commands] autotorsocenter`; the
+  default 2 means "after a delay") turns the *legs* toward the torso and, in
+  the same step, counter-rotates the torso (`+0x2DC` and `+0x2E4`,
+  `0x0054FD10`). The hook keeps that counter-rotation and moves the aim point
+  with it, so the aim holds still in the world while the legs catch up. This
+  was verified on the HUD compass: a 4° flick changed the heading 1° → 5°,
+  and it stayed at 5° through 6 s of leg centering. An earlier build
+  overrode the counter-rotation and the legs chased the torso in a slow spin.
+- **Torso keys** (held counters `+0x464`..`+0x470`) and **Center Torso**
+  (`+0x6D0`) drive the torso as usual. The aim point follows the torso while
+  they are in use.
+- Turning the legs (A/D) carries the aim point along, as in the stock game
+  (world-stabilized aim while turning is issue #17).
+
+Applies only with the mouse on and Mouse X Axis = Torso (the MW5 layout sets
+both). Otherwise, or with `track_pointer=0`, the stock code runs unchanged.
+
+**Marker** (`[aim] marker=1`, default with `track_pointer`). In aim mode the
+`ddraw.dll` proxy always draws a small green circle with a dark outline at
+the aim point, also when the reticle is on it. It is drawn on the
+finished mission frame just before present, using `IDirectDrawSurface7::Blt`
+colour fills, and scaled with the frame height. The aim offset comes from
+the dinput proxy's export `Mw4AimMarker`. The angle-to-pixel scale was
+measured from frames a known twist apart, because GameOS transforms vertices
+itself and Direct3D's projection is unused: `x = w/2 × 2.02 × tan(yaw)`,
+`y = h/2 × 2.32 × tan(pitch)` (about 53° horizontal field of view; the zoom
+view is a separate inset).
+
+Verified in Tharkad - Checkmate (fresh extraction, `track_pointer=1`):
+
+| Test | Result |
+|---|---|
+| 300 counts instant / over 300 ms | both end at −0.3480 rad, no overshoot |
+| −300 counts over 1 s / over 100 ms | both end at 0.0000 |
+| 3 s idle | no drift |
+| 3000 counts left | aim point stops at +1.3963 (the limit); 1200 back lands at 0.0043 |
+| pitch, 2000 counts | stops at −0.5236 (the limit) |
+| 20° flick | compass 4° → 23°; marker shown while turning |
 
 ### Selected resolution
 
@@ -279,7 +380,9 @@ game's handler sees it.
 | fullscreen 16-bit (last resort) | `0x007100F0`, `0x007100FA` | `0x10` -> `0x20` |
 | `IDirect3DDevice7::Clear` | ddraw.dll vtable slot 10 | retry failed Clear without stencil / depth |
 | `IDirectDraw7::CreateSurface` | ddraw.dll vtable slot 6 | retry failed 32-bit depth request as D24S8/D24X8 |
-| `IDirectDrawSurface7::Blt` | ddraw.dll vtable slot 5 | present scaling; window DC off the main monitor |
+| `IDirectDrawSurface7::Blt` | ddraw.dll vtable slot 5 | present scaling; window DC off the main monitor; aim marker |
+| keyboard drive step | `0x0054F2A0` | 5-byte detour (MW5 throttle, Throttle Decay, aim point) |
+| mouse step | `0x0054EDA0` | 5-byte detour (aim point; pass-through when off) |
 
 The last three are COM vtable hooks inside the `ddraw.dll` proxy; nothing in
 `MW4Mercs.exe` is patched for them.
@@ -304,6 +407,10 @@ depth_fix=1   ; (default, not in the shipped ini) bind the attached depth buffer
 [controls]
 mw5=0         ; faster W/S + DEFAULT applies the MW5 key layout
 decay=0       ; Throttle Decay (also Options > Game; written there)
+[aim]
+track_pointer=0 ; mouse moves an aim point; the torso turns to it and stops
+sensitivity=1.0 ; aim point speed (x the game's mouse sensitivity slider)
+marker=1        ; small circle at the aim point (always shown in aim mode)
 [frontend]
 stretch=1     ; scale the picture into the window
 [log]

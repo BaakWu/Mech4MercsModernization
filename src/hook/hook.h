@@ -64,13 +64,23 @@ struct Config {
     bool debug_automation = false;
     bool controls_mw5 = false;  // [controls] mw5: MW5-style driving (opt-in)
     bool throttle_decay = false;  // [controls] decay: initial Throttle Decay setting
+    bool aim_track_pointer = false;  // [aim] track_pointer: mouse moves an aim point (opt-in)
+    float aim_sensitivity = 1.0f;    // [aim] sensitivity: multiplier on the game's slider
+    bool aim_marker = true;          // [aim] marker: show where the torso is turning to
 };
 
 // MW5-style keyboard driving (controls.cpp).
 bool InstallControlsHooks();
 bool ThrottleDecayEnabled();
 void SetThrottleDecay(bool enabled);  // Options > Game; saved to mw4hook.ini
-void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWORD a2);
+// screen_open: called from Options > Controls (DEFAULT); false elsewhere
+// (a new pilot), where the key assignments bypass the screen redraw.
+void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWORD a2,
+                    bool screen_open = true);
+
+// Mouse aim point (aim.cpp, issue #15).
+bool InstallAimHooks();
+void AimAfterDrive(char* controller, double now);
 
 const Config& GetConfig();
 

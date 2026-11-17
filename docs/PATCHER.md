@@ -20,8 +20,10 @@ One window:
   - *Throttle Decay setting* (always included; it is an Options > Game
     switch, off until the player turns it on)
   - *MechWarrior 5-style controls* (optional checkbox; writes
-    `[controls] mw5=1`; the player presses DEFAULT in Options > Controls to
-    load the layout). Unticked keeps MW4's controls.
+    `[controls] mw5=1` and `[aim] track_pointer=1`): the MW5 key layout
+    (new pilots get it automatically; existing pilots via DEFAULT in
+    Options > Controls) and the mouse aim point. Unticked keeps MW4's
+    controls.
 - **Install** (shows **Update** when already installed), **Uninstall**,
   **Close**, and a log of the install output.
 

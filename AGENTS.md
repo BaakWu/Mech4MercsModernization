@@ -505,7 +505,11 @@ High-value files:
   scanning (display, script and archive paths are mapped in `docs/HOOK.md`).
 - Run the issue #1 acceptance items still open: 100 toggle/mode cycles, rapid
   toggles, AntiHack and multiplayer join with the detours present.
-- Find the exact 3.1c mouse aim/dead-zone code and the leg-turn mouse lock.
+- Mouse aim/dead-zone code found (2026-11-16): the mouse step `0x0054EDA0`
+  drains its accumulator by at least `[mouse] minchange` per frame (#3). The
+  opt-in aim point (#15, `[aim] track_pointer`, `docs/HOOK.md`) replaces that
+  path. Still open: a fix for the stock path itself (#3) and the leg-turn
+  mouse lock (#4).
 - Verify the Windows-scaling torso drift fix with real mouse aim.
 - Identify the menu first-click delay and second-click loss.
 - Identify the main-monitor/black-screen behavior.

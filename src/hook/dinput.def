@@ -8,3 +8,4 @@ EXPORTS
     DllRegisterServer=Proxy_DllRegisterServer
     DllUnregisterServer=Proxy_DllUnregisterServer
     Mw4ShellMode=Mw4ShellMode
+    Mw4AimMarker=Mw4AimMarker

@@ -28,11 +28,17 @@ The first release is a **windowed-mode patch**:
 Also included: **Throttle Decay**, an On/Off switch on Options > Game (off by
 default; the throttle eases back to zero when W/S is released).
 
-Optional, chosen in the installer: **MechWarrior 5-style controls**: faster
-W/S throttle and an MW5-style key layout (X full stop, P power, numpad
-presets, mouse aims the torso, …) loaded with the DEFAULT button in
-Options > Controls. Leave it unticked to keep MW4's controls. Details in
-`docs/HOOK.md`.
+Optional, chosen in the installer: **MechWarrior 5-style controls**:
+
+- faster W/S throttle and an MW5-style key layout (X full stop, P power,
+  numpad presets, mouse aims the torso, …). New pilots get it automatically;
+  for an existing pilot press DEFAULT in Options > Controls.
+- **mouse aim point** (issue #15): the mouse moves an aim point, marked by a
+  small circle, and the torso turns to it at its own speed and stops on it.
+  There is no drift after the mouse stops, and a fast flick lands where a
+  slow one does.
+
+Leave it unticked to keep MW4's controls. Details in `docs/HOOK.md`.
 
 Making windowed mode usable also fixed four bugs that are in the stock game on
 current Windows: low mission frame rate, garbled audio, see-through terrain,

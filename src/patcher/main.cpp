@@ -30,7 +30,7 @@
 
 namespace {
 
-constexpr const wchar_t* kToolVersion = L"1.1.0";
+constexpr const wchar_t* kToolVersion = L"1.2.0";
 constexpr const char* kExpectedExeSha256 =
     "72bbb1ba3e5e5e7dc7607ca403f3d9aca301d0b16814a6b577bda7ec5c922b41";
 constexpr const wchar_t* kGameExe = L"MW4Mercs.exe";
@@ -862,6 +862,22 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1) {
         std::string text(ini.begin(), ini.end());
         SetIniValue(text, "controls", "mw5", use_mw5 ? "1" : "0");
         SetIniValue(text, "controls", "decay", decay ? "1" : "0");
+        // The mouse aim point is part of the MW5-style controls choice.
+        SetIniValue(text, "aim", "track_pointer", use_mw5 ? "1" : "0");
+        // Player tuning kept from an existing install.
+        if (FileExists(existing)) {
+            for (const wchar_t* key : {L"sensitivity", L"marker"}) {
+                wchar_t value[64] = {};
+                GetPrivateProfileStringW(L"aim", key, L"", value, 64, existing.c_str());
+                if (value[0]) {
+                    char narrow_key[32] = {};
+                    char narrow_value[64] = {};
+                    WideCharToMultiByte(CP_ACP, 0, key, -1, narrow_key, 32, nullptr, nullptr);
+                    WideCharToMultiByte(CP_ACP, 0, value, -1, narrow_value, 64, nullptr, nullptr);
+                    SetIniValue(text, "aim", narrow_key, narrow_value);
+                }
+            }
+        }
         ini.assign(text.begin(), text.end());
         Print(L"MechWarrior 5-style controls: %ls\n", use_mw5 ? L"on" : L"off");
     }
@@ -1734,8 +1750,8 @@ void Finished(int result, int action) {
         L"\x2022 Windowed / borderless: Options > Video > Windowed (Alt+Enter switches)\n"
         L"\x2022 Throttle Decay: Options > Game (off until you turn it on)";
     if (SendMessageW(g_mw5, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-        text += L"\n\x2022 MechWarrior 5-style controls: in Options > Controls press DEFAULT, "
-                L"then OK, to load the MW5 key layout";
+        text += L"\n\x2022 MechWarrior 5-style controls: new pilots get them automatically; "
+                L"for an existing pilot press DEFAULT in Options > Controls, then OK";
     }
     MessageBoxW(g_wnd, text.c_str(), L"Installed", MB_OK | MB_ICONINFORMATION);
 }
@@ -1785,9 +1801,9 @@ void CreateControls(const std::wstring& initial_dir, bool initial_mw5) {
                   WS_TABSTOP | BS_AUTOCHECKBOX, 30, 284, 550, 20, kIdMw5);
     SendMessageW(g_mw5, BM_SETCHECK, initial_mw5 ? BST_CHECKED : BST_UNCHECKED, 0);
     Child(L"STATIC",
-          L"Faster W/S throttle, and Options > Controls > DEFAULT loads an MW5-style key layout "
-          L"(X full stop, P power, numpad throttle presets, mouse aims the torso). Leave "
-          L"unticked to keep MW4's controls.",
+          L"MW5-style key layout (X full stop, P power, numpad throttle presets), faster W/S "
+          L"throttle, and mouse aiming with an aim point the torso turns to. Leave unticked "
+          L"to keep MW4's controls.",
           0, 50, 305, 530, 48, 0);
 
     g_log = Child(L"EDIT", L"",

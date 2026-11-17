@@ -28,6 +28,7 @@
 #include <ddraw.h>
 #include <d3d.h>
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -206,6 +207,112 @@ int ShellModeFromHook() {
     return fn ? fn() : -1;
 }
 
+
+// Mouse aim-point marker (issue #15). The dinput proxy knows where the aim
+// point is relative to the torso (Mw4AimMarker); the cockpit view's
+// projection turns that angle into a position on the frame. -1 = marker
+// off, 0 = nothing to draw, 1 = draw.
+int AimMarkerFromHook(float* yaw, float* pitch) {
+    using AimMarker_t = int(WINAPI*)(float*, float*);
+    static AimMarker_t fn = nullptr;
+    static bool searched = false;
+    if (!searched) {
+        wchar_t path[MAX_PATH];
+        DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+        wchar_t* slash = len ? wcsrchr(path, L'\\') : nullptr;
+        if (slash) {
+            wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"dinput.dll");
+            HMODULE hook = GetModuleHandleW(path);
+            if (hook) {
+                searched = true;
+                fn = reinterpret_cast<AimMarker_t>(GetProcAddress(hook, "Mw4AimMarker"));
+            }
+        }
+    }
+    return fn ? fn(yaw, pitch) : -1;
+}
+
+// Cockpit view projection: a direction `angle` off the view centre lands at
+// half_size * scale * tan(angle) pixels from the centre. GameOS transforms
+// vertices itself (Direct3D's projection is unused), so these were measured
+// in a mission from frames a known torso twist / pitch apart (3.1c, 4:3
+// modes: 4 degrees = 72 px horizontally and 62 px vertically at 1024x768;
+// about 53 degrees horizontal field of view). The zoom view is a separate
+// inset; the main view does not change with it.
+constexpr float kViewScaleX = 2.02f;
+constexpr float kViewScaleY = 2.32f;
+
+// Draws a small circle (the aim point) on the finished frame before it is
+// presented: a green ring with a 1-pixel dark outline for contrast, scaled
+// with the frame height. Shown all the time in aim mode.
+void DrawAimMarker(IDirectDrawSurface7* frame, const RECT* frame_rect,
+                   HRESULT(WINAPI* blt)(IDirectDrawSurface7*, LPRECT, IDirectDrawSurface7*,
+                                        LPRECT, DWORD, LPDDBLTFX)) {
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+    if (AimMarkerFromHook(&yaw, &pitch) != 1) {
+        return;
+    }
+    const float m00 = kViewScaleX;
+    const float m11 = kViewScaleY;
+    DDSURFACEDESC2 desc{};
+    desc.dwSize = sizeof(desc);
+    if (FAILED(frame->GetSurfaceDesc(&desc))) {
+        return;
+    }
+    RECT area = frame_rect ? *frame_rect
+                           : RECT{0, 0, static_cast<LONG>(desc.dwWidth),
+                                  static_cast<LONG>(desc.dwHeight)};
+    const int w = area.right - area.left;
+    const int h = area.bottom - area.top;
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    // Yaw + = left of the torso aim; pitch + = below it (the torso's pitch
+    // grows downward).
+    const float clamp_angle = 1.4f;
+    yaw = yaw > clamp_angle ? clamp_angle : (yaw < -clamp_angle ? -clamp_angle : yaw);
+    pitch = pitch > clamp_angle ? clamp_angle : (pitch < -clamp_angle ? -clamp_angle : pitch);
+    const int cx = area.left + w / 2 - static_cast<int>(w * 0.5f * m00 * std::tan(yaw));
+    const int cy = area.top + h / 2 + static_cast<int>(h * 0.5f * m11 * std::tan(pitch));
+
+    const int unit = h >= 900 ? 2 : 1;
+    const int radius = 8 * unit;
+    const int thick = unit + 1;
+    auto color = [&](DWORD rgb) -> DWORD {
+        const DDPIXELFORMAT& pf = desc.ddpfPixelFormat;
+        if (pf.dwRGBBitCount == 16) {
+            const DWORD r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+            return pf.dwGBitMask == 0x07E0 ? ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+                                           : ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+        }
+        return rgb;
+    };
+    // A ring: small squares along the circle, enough that they touch.
+    constexpr int kDots = 48;
+    RECT dots[kDots];
+    for (int k = 0; k < kDots; ++k) {
+        const float a = 6.2831853f * k / kDots;
+        const int x = cx + static_cast<int>(std::lround(radius * std::cos(a))) - thick / 2;
+        const int y = cy + static_cast<int>(std::lround(radius * std::sin(a))) - thick / 2;
+        dots[k] = {x, y, x + thick, y + thick};
+    }
+    DDBLTFX fx{};
+    fx.dwSize = sizeof(fx);
+    for (int pass = 0; pass < 2; ++pass) {
+        // A dark outline first, then the green ring on top.
+        fx.dwFillColor = color(pass == 0 ? 0x00101010 : 0x0040FF40);
+        for (RECT dot : dots) {
+            if (pass == 0) {
+                InflateRect(&dot, 1, 1);
+            }
+            RECT clipped{};
+            if (IntersectRect(&clipped, &dot, &area)) {
+                blt(frame, &clipped, nullptr, nullptr, DDBLT_COLORFILL | DDBLT_WAIT, &fx);
+            }
+        }
+    }
+}
 
 // Shared with the dinput proxy (cursor mapping) through Mw4FrontendViewport.
 CRITICAL_SECTION g_view_lock;
@@ -515,6 +622,12 @@ HRESULT WINAPI Hook_Blt(IDirectDrawSurface7* self, LPRECT dest_rect,
                         LPDDBLTFX fx) {
     LARGE_INTEGER start;
     QueryPerformanceCounter(&start);
+    if (src && dest_rect && ShellModeFromHook() == 0) {
+        DDSCAPS2 caps{};
+        if (SUCCEEDED(self->GetCaps(&caps)) && (caps.dwCaps & DDSCAPS_PRIMARYSURFACE)) {
+            DrawAimMarker(src, src_rect, g_original_blt);
+        }
+    }
     HRESULT result = Hook_BltInner(self, dest_rect, src, src_rect, flags, fx);
     if (src && dest_rect) {
         DDSCAPS2 caps{};
