@@ -1,14 +1,14 @@
-# MechWarrior 4: Mercenaries — Modern Patch
+# MechWarrior 4 Mercenaries Modernization Patch
 
-An independent, reversible patch project for **MechWarrior 4: Mercenaries
-3.1c** (`51.03.01.0030`).
+An independent, reversible patch for **MechWarrior 4: Mercenaries 3.1c**
+(`51.03.01.0030`).
 
-The goal is to make the original game launch and play correctly on modern
-Windows without replacing the engine, breaking AntiHack, or shipping game
-files.
+It makes the original game launch and play correctly on modern Windows and
+adds a few optional quality-of-life features, without replacing the engine,
+breaking AntiHack, or shipping game files.
 
-> **Status:** the windowed-mode patch is feature complete. Releases are on the
-> GitHub Releases page; from 1.1.0 they ship as a GUI installer.
+> **Status:** releases are on the GitHub Releases page as a GUI installer,
+> `MW4Mercs-ModernizationPatch-Setup-<version>.exe`.
 
 ## Why this exists
 
@@ -16,45 +16,52 @@ MechWarrior 4: Mercenaries was built for DirectX 7, 32-bit Windows, and display
 hardware from 2002. On modern systems it can fail in ways that look like
 hardware incompatibility but are often configuration or compatibility bugs.
 
-The first release is a **windowed-mode patch**:
+## What the patch does
+
+### Always installed
 
 - a **Windowed** checkbox in Options > Video: a window at the chosen
   resolution, or borderless fullscreen on the main monitor (Alt+Enter toggles)
-- keep the **in-game Options > Resolution controls working**
+- the **in-game Options > Resolution controls** keep working
 - always **32-bit color**, never a 16-bit fallback
 - correct mouse and display behavior with Windows display scaling above 100%
-- keep the game’s **AntiHack active and untouched**
+- **sharper menus**: the 800x600 menus, MechLab and text are scaled up with a
+  Lanczos filter, readable on 1080p and larger screens (issue #20)
+- **audio keeps playing** when you click outside the game window; input still
+  pauses (issue #26)
+- fixes for four bugs in the stock game on current Windows: low mission frame
+  rate, garbled audio, see-through terrain, and a window that froze on a
+  second monitor
+- the game's **AntiHack stays active and untouched**
 
-Also included: **Throttle Decay**, an On/Off switch on Options > Game (off by
-default; the throttle eases back to zero when W/S is released).
+Gameplay settings, each an On/Off switch on Options > Game (off by default):
 
-New pilots get working controls and a **camouflage of your choice**: Roster >
-New > Join Regiment has a Camouflage list (default None). MekTek's template
-profile gave every new unit "7-Ops - Pink" (issue #19). Roster > Update
-changes a pilot's camouflage for the 'Mechs it gets from then on (as does
-Options > Multiplayer > Skin).
+- **Throttle Decay**: the throttle eases back to zero when W/S is released.
+- **Gyro Aim** (with the MW5 controls, issue #17): while the legs turn, the
+  aim keeps its direction until the torso reaches its twist limit. It lets
+  you aim faster while turning, so it is a per-player choice.
 
-Optional, chosen in the installer: **MechWarrior 5-style controls**:
+**Camouflage for new pilots** (issue #19): Roster > New > Join Regiment has
+a Camouflage list (default None). MekTek's template profile gave every new
+unit "7-Ops - Pink". Roster > Update changes a pilot's camouflage for the
+'Mechs it gets from then on (as does Options > Multiplayer > Skin).
+
+### Optional: MechWarrior 5-style controls
+
+Ticked in the installer:
 
 - faster W/S throttle and an MW5-style key layout (X full stop, P power,
   numpad presets, mouse aims the torso, …). New pilots get it automatically;
   for an existing pilot press DEFAULT in Options > Controls.
 - **mouse aim point** (issue #15): the mouse moves an aim point, marked by a
   small circle, and the torso turns to it at its own speed and stops on it.
-  There is no drift after the mouse stops, and a fast flick lands where a
-  slow one does.
-- **Gyro Aim** (issue #17), an On/Off switch on Options > Game (off by
-  default): while the legs turn, the aim keeps its direction until the torso
-  reaches its twist limit. It lets you aim faster while turning, so it is a
-  per-player gameplay option.
+  A thin green line joins the reticle to the aim point while the torso is
+  still turning (issue #23). There is no drift after the mouse stops, and a
+  fast flick lands where a slow one does.
 
 Leave it unticked to keep MW4's controls. Details in `docs/HOOK.md`.
 
-Making windowed mode usable also fixed four bugs that are in the stock game on
-current Windows: low mission frame rate, garbled audio, see-through terrain,
-and a window that froze on a second monitor. See `docs/HOOK.md`.
-
-The first release does **not** replace the renderer, reimplement the engine, or
+The patch does **not** replace the renderer, reimplement the engine, or
 change the single-player campaign.
 
 ### Not a renderer replacement
@@ -68,13 +75,13 @@ The game must continue to look like the original 2002 release:
   grass/clutter, model replacement, widescreen/FOV changes, or HUD restyling
 - no 64-channel audio change
 
-The only display change in the first release is compatibility-oriented:
-windowed or borderless play at the chosen resolution, with the original 4:3
-picture scaled to fit. That is not a visual overhaul.
+The display changes are compatibility-oriented: windowed or borderless play at
+the chosen resolution, with the original 4:3 picture scaled to fit. That is
+not a visual overhaul.
 
 ## Installing
 
-Run `MW4Mercs-WindowedPatch-Setup-<version>.exe`:
+Run `MW4Mercs-ModernizationPatch-Setup-<version>.exe`:
 
 1. It finds the game folder (or use Browse) and checks that it is
    MechWarrior 4: Mercenaries 3.1c.
@@ -84,8 +91,9 @@ Run `MW4Mercs-WindowedPatch-Setup-<version>.exe`:
 3. Click **Install**, then start the game as usual. It opens in a window; set
    the size and the Windowed option in Options > Video.
 
-Run the installer again to switch the MW5 controls on or off (**Update**) or
-to **Uninstall**. If the game is under Program Files, the installer offers to
+Run the installer again to install a newer version or switch the MW5 controls
+on or off (**Update**; your resolution and settings are kept), or to
+**Uninstall**. If the game is under Program Files, the installer offers to
 restart itself as administrator.
 
 The fix layer is loaded at runtime rather than rewriting `MW4Mercs.exe`. That
@@ -96,7 +104,7 @@ after uninstalling, the folder matches the original 3.1c manifest again.
 Build the installer with:
 
 ```powershell
-pwsh ./tools/New-Mw4Release.ps1     # dist\MW4Mercs-WindowedPatch-Setup-<version>.exe
+pwsh ./tools/New-Mw4Release.ps1     # dist\MW4Mercs-ModernizationPatch-Setup-<version>.exe
 ```
 
 ## Supported game
@@ -153,7 +161,7 @@ pwsh ./tools/Repair-Mw4Config.ps1 `
 
 The script backs up the existing `options.ini` before writing a new one.
 
-### Runtime hook: windowed mode
+### Runtime hook
 
 The native hook in `src/hook/` is a `dinput.dll` proxy plus a `ddraw.dll`
 proxy. Together they:
@@ -165,6 +173,8 @@ proxy. Together they:
 - relaunch a raw `MW4Mercs.exe` launch with `-window` before the game starts
 - fix the per-frame display rebuild (frame rate, audio), the unbound depth
   buffer (see-through terrain) and the frozen window on a second monitor
+- add the gameplay options, the mouse aim point, the camouflage choice and
+  background audio described above
 - do not modify `MW4Mercs.exe` or any game file on disk
 
 Build, test and technical details are in `docs/HOOK.md`; open problems are in
@@ -211,35 +221,28 @@ Note: the base game’s `-window` switch opens an 800x600 window regardless of
 the configured resolution; configuration alone cannot change that. The runtime
 hook does.
 
-## Backlog
-
-- MechWarrior 5-style controls are implemented as an opt-in option
-  (`[controls] mw5=1`, issue #13; see above and `docs/HOOK.md`).
-
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
 | `AGENTS.md` | Agent/contributor guide, release scope, technical references |
 | `docs/BASELINE.md` | Supported build identity, hashes, known-good configuration |
-| `docs/HOOK.md` | Runtime hook: windowed mode, Windowed checkbox, Direct3D fixes |
+| `docs/HOOK.md` | Runtime hook: display, controls, aim point, camouflage, audio |
 | `docs/KNOWN-ISSUES.md` | Problems found in play testing and their status |
 | `docs/PATCHER.md` | Development `mw4patch.exe`: verification, install, backups, uninstall |
 | `docs/PATCHING.md` | Legacy patch format and modern patching plan |
 | `docs/ROADMAP.md` | Milestones and non-goals |
 | `manifests/` | Core and full SHA-256 baselines |
-| `src/hook/` | Native `dinput.dll` proxy and Win32/display hooks |
+| `src/hook/` | Native `dinput.dll` and `ddraw.dll` proxies (the runtime hook) |
 | `src/patcher/` | Installer: GUI release build and command-line `mw4patch.exe` |
 | `templates/` | Known-good configuration template |
 | `tools/` | Inspect, verify, repair, window-test, and manifest scripts |
 
 ## Development
 
-Current tools require **PowerShell 7**.
-
-The planned patcher will be a self-contained Windows executable. The planned
-runtime fix layer will be a native DLL loaded beside the game executable. Build
-and packaging instructions will be added with the first patcher scaffold.
+Tools require **PowerShell 7**; the hook and installer build with the Visual
+Studio 2022 C++ tools (x86). `pwsh ./tools/New-Mw4Release.ps1` builds both and
+writes the release installer to `dist\`.
 
 Before working on binary behavior, read `AGENTS.md`. In particular:
 
@@ -270,8 +273,11 @@ See `docs/ROADMAP.md` for the milestone plan. The short version:
 1. Verify the baseline and fix configuration. **Done.**
 2. Implement windowed mode and the Windowed checkbox. **Done.**
 3. Release build: GUI installer (`tools/New-Mw4Release.ps1`). **Done.**
-4. Publish the first release.
-5. Add optional WASD throttle-decay controls.
+4. Publish releases. **Done** (1.0.0 onward).
+5. Optional MW5-style controls, Throttle Decay, mouse aim point and Gyro Aim.
+   **Done.**
+6. Open: 8-'Mech campaign lances (#21), campaign co-op (#16), AntiHack and
+   multiplayer verification (#12).
 
 ## Legal
 

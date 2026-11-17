@@ -108,7 +108,7 @@ if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
 }
 
 # GUI installer: same source, MW4PATCH_GUI, Windows subsystem, visual styles.
-$setup = Join-Path $OutDir 'MW4Mercs-WindowedPatch-Setup.exe'
+$setup = Join-Path $OutDir 'MW4Mercs-ModernizationPatch-Setup.exe'
 $guiObj = Join-Path $OutDir 'patcher\obj-gui'
 New-Item -ItemType Directory -Path $guiObj -Force | Out-Null
 $guiCommand = @(

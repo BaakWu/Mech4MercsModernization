@@ -1544,7 +1544,7 @@ int RunInteractive() {
 
 #ifdef MW4PATCH_GUI
 // ---------------------------------------------------------------------------
-// GUI installer (MW4Mercs-WindowedPatch-Setup.exe). Same install/uninstall
+// GUI installer (MW4Mercs-ModernizationPatch-Setup.exe). Same install/uninstall
 // code as the command line build; this is only the window around it.
 // ---------------------------------------------------------------------------
 #include <commctrl.h>
@@ -1777,8 +1777,8 @@ HWND Child(const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, i
 }
 
 void CreateControls(const std::wstring& initial_dir, bool initial_mw5) {
-    std::wstring title = std::wstring(L"MechWarrior 4: Mercenaries \x2014 Windowed Patch ") +
-                         kToolVersion;
+    std::wstring title =
+        std::wstring(L"MechWarrior 4 Mercenaries Modernization Patch (") + kToolVersion + L")";
     Child(L"STATIC", title.c_str(), 0, 16, 14, 580, 26, 0, g_title_font);
     Child(L"STATIC",
           L"For MechWarrior 4: Mercenaries 3.1c (MekTek). No game file is changed; uninstall "
@@ -1939,7 +1939,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
     wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wc.lpszClassName = L"MW4WindowedPatchSetup";
+    wc.lpszClassName = L"MW4ModernizationPatchSetup";
     RegisterClassExW(&wc);
 
     RECT rect = {0, 0, gui::S(612), gui::S(546)};
@@ -1947,7 +1947,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     AdjustWindowRect(&rect, style, FALSE);
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;
-    gui::g_wnd = CreateWindowExW(0, wc.lpszClassName, L"MechWarrior 4: Mercenaries Windowed Patch",
+    gui::g_wnd = CreateWindowExW(0, wc.lpszClassName, L"MechWarrior 4 Mercenaries Modernization Patch",
                                  style, (GetSystemMetrics(SM_CXSCREEN) - width) / 2,
                                  (GetSystemMetrics(SM_CYSCREEN) - height) / 2, width, height,
                                  nullptr, nullptr, instance, nullptr);

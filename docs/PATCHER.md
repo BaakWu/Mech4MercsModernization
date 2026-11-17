@@ -2,9 +2,9 @@
 
 `src/patcher/main.cpp` builds two programs from the same code:
 
-- **`MW4Mercs-WindowedPatch-Setup.exe`** (`MW4PATCH_GUI`, Windows
+- **`MW4Mercs-ModernizationPatch-Setup.exe`** (`MW4PATCH_GUI`, Windows
   subsystem) is the **release**. `tools/New-Mw4Release.ps1` copies it to
-  `dist\MW4Mercs-WindowedPatch-Setup-<version>.exe`.
+  `dist\MW4Mercs-ModernizationPatch-Setup-<version>.exe`.
 - **`mw4patch.exe`** (console) is the command-line build, for testing.
 
 ## GUI installer

@@ -6,7 +6,7 @@ committed to Git.
 ## Release installer
 
 ```text
-dist\MW4Mercs-WindowedPatch-Setup-<version>.exe
+dist\MW4Mercs-ModernizationPatch-Setup-<version>.exe
 ```
 
 The public release, a GUI installer with the hook embedded. Build it with:

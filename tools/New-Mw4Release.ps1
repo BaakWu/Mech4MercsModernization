@@ -5,7 +5,7 @@ param(
 )
 
 # Builds the release: the GUI installer with the hook embedded.
-#   dist\MW4Mercs-WindowedPatch-Setup-<version>.exe
+#   dist\MW4Mercs-ModernizationPatch-Setup-<version>.exe
 # The version is kToolVersion in src\patcher\main.cpp (shown in the installer
 # window and written to the install record).
 $ErrorActionPreference = 'Stop'
@@ -29,11 +29,11 @@ $ini = Get-Content (Join-Path $repo 'artifacts\hook\mw4hook.ini') -Raw
 if ($ini -match '(?im)^\s*\[debug\]') { throw 'mw4hook.ini contains a [debug] section.' }
 if ($ini -match '(?im)^\s*(mw5|decay|track_pointer|gyro)\s*=\s*1') { throw 'mw4hook.ini enables an opt-in feature by default.' }
 
-$setup = Join-Path $repo 'artifacts\MW4Mercs-WindowedPatch-Setup.exe'
+$setup = Join-Path $repo 'artifacts\MW4Mercs-ModernizationPatch-Setup.exe'
 if (-not (Test-Path $setup)) { throw "Missing build output: $setup" }
 $dist = Join-Path $repo 'dist'
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
-$out = Join-Path $dist "MW4Mercs-WindowedPatch-Setup-$version.exe"
+$out = Join-Path $dist "MW4Mercs-ModernizationPatch-Setup-$version.exe"
 Copy-Item $setup $out -Force
 
 Write-Host "Release: $out"

@@ -20,7 +20,7 @@ Rebirth. The product is a runtime patch that:
   byte pattern; anything else leaves the game untouched)
 
 The release artifact is a **GUI installer**,
-`MW4Mercs-WindowedPatch-Setup-<version>.exe` (built by
+`MW4Mercs-ModernizationPatch-Setup-<version>.exe` (built by
 `tools/New-Mw4Release.ps1` from `src/patcher/` with `MW4PATCH_GUI`). It finds
 or asks for the game folder, verifies 3.1c, and installs:
 
@@ -35,6 +35,10 @@ install in place (keeping the player's Throttle Decay choice), and
 uninstalls back to a folder that matches the full 3.1c manifest.
 `mw4patch.exe` is the command-line build of the same code for testing.
 (2026-11-16: zip release replaced by the installer.)
+
+The product name is **MechWarrior 4 Mercenaries Modernization Patch**. GitHub
+releases are titled `MechWarrior 4 Mercenaries Modernization Patch (x.y.z)`
+with tag `vx.y.z` (2026-11-17: "Windowed Patch" retired; past titles renamed).
 
 ## 2. Supported baseline
 
@@ -262,7 +266,7 @@ AntiHack.
 A **runtime hook** shipped in a GUI installer:
 
 ```text
-MW4Mercs-WindowedPatch-Setup-<version>.exe   (src/patcher, MW4PATCH_GUI)
+MW4Mercs-ModernizationPatch-Setup-<version>.exe   (src/patcher, MW4PATCH_GUI)
   - verifies the 3.1c build and core files
   - installs dinput.dll, ddraw.dll, mw4hook.ini (embedded), optional MW5 controls
   - backs up options.ini / shortcut / conflicting files, writes an install record
@@ -302,7 +306,7 @@ dinput.dll / ddraw.dll          native runtime hook
 | `templates/options.ini` | Known-good configuration template |
 | `src/hook/` | Native dinput proxy and window/resolution hooks |
 | `src/patcher/` | Installer: GUI release build and command-line `mw4patch.exe` |
-| `tools/New-Mw4Release.ps1` | Builds the release installer (`dist\MW4Mercs-WindowedPatch-Setup-<version>.exe`) |
+| `tools/New-Mw4Release.ps1` | Builds the release installer (`dist\MW4Mercs-ModernizationPatch-Setup-<version>.exe`) |
 | `tools/Get-Mw4InstallInfo.ps1` | Identify a build and validate options.ini |
 | `tools/Test-Mw4Manifest.ps1` | Verify files against a manifest |
 | `tools/Repair-Mw4Config.ps1` | Write a safe options.ini with backup |
