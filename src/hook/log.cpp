@@ -66,6 +66,7 @@ void LoadConfig() {
     g_config.aim_sensitivity = (sensitivity > 0.05f && sensitivity < 20.0f) ? sensitivity : 1.0f;
     g_config.aim_marker = GetPrivateProfileIntW(L"aim", L"marker", 1, path) != 0;
     g_config.aim_gyro = GetPrivateProfileIntW(L"aim", L"gyro", 0, path) != 0;
+    g_config.aim_auto_center = GetPrivateProfileIntW(L"aim", L"auto_center", 0, path) != 0;
     g_config.full_company = GetPrivateProfileIntW(L"campaign", L"full_company", 0, path) != 0;
     g_config.hud_sharp = GetPrivateProfileIntW(L"hud", L"sharp", 1, path) != 0;
     g_config.mechlab_filter = GetPrivateProfileIntW(L"mechlab", L"class_filter", 1, path) != 0;

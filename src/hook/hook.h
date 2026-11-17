@@ -76,6 +76,7 @@ struct Config {
     float aim_sensitivity = 1.0f;    // [aim] sensitivity: multiplier on the game's slider
     bool aim_marker = true;          // [aim] marker: show where the torso is turning to
     bool aim_gyro = false;           // [aim] gyro: initial Gyro Aim setting (Options > Game)
+    bool aim_auto_center = false;    // [aim] auto_center: keep auto-centering in aim mode (#31)
     bool full_company = false;  // [campaign] full_company: 7 lancemates where 1-6 (#21)
     bool hud_sharp = true;          // [hud] sharp: 4x HUD images (#27)
     bool mechlab_filter = true;     // [mechlab] class_filter: weight-class filter (#28)
@@ -99,6 +100,9 @@ void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWOR
 // Mouse aim point (aim.cpp, issue #15).
 bool InstallAimHooks();
 void AimAfterDrive(char* controller, double now);
+// True when the drive step should run with automatic torso centering off:
+// aim mode is in use and [aim] auto_center is 0 (issue #31).
+bool AimSuppressesAutoCenter(char* controller);
 bool GyroAimEnabled();
 
 // Full company in campaign missions (campaign.cpp, issue #21).

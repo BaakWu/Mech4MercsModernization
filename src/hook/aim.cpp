@@ -12,10 +12,12 @@
 // lands in the same place however fast it was made. The aim point stops at
 // the mech's twist / pitch limits. Turning the legs carries it along, as in
 // the stock game. Torso keys and Center Torso keep working; the aim point
-// follows the torso while they are used. The game's auto-centering
-// (options.ini autotorsocenter: the legs turn toward the torso after a
-// delay) keeps working; the aim point stays where it is in the world while
-// the legs catch up.
+// follows the torso while they are used. Aiming never turns the 'Mech: the
+// game's automatic centering (options.ini autotorsocenter: the legs turn
+// toward the torso after a delay) is off in aim mode (issue #31; controls.cpp
+// runs the drive step with it off). With [aim] auto_center=1 it keeps
+// working and the aim point stays where it is in the world while the legs
+// catch up.
 //
 // Applies only with the mouse on and the Mouse X axis set to Torso
 // (Options > Controls); otherwise the stock code runs unchanged.
@@ -308,7 +310,9 @@ void AimAfterDrive(char* self, double now) {
             g.yaw.last_angle += steer_yaw - yaw;
         }
     } else {
-        // Auto-centering (options.ini autotorsocenter) turns the legs toward
+        // Only with [aim] auto_center=1 (otherwise the drive step ran with
+        // auto-centering off and the yaw command is 0 here; explicit Center
+        // commands returned above). Auto-centering turns the legs toward
         // the torso and, in the same step, counter-rotates the torso (its
         // command is what the drive step left in the yaw command; the mouse
         // contributes nothing there in aim mode). Keep that counter-rotation
@@ -368,6 +372,17 @@ extern "C" int WINAPI Mw4AimMarker(float* yaw_offset, float* pitch_offset) {
         *pitch_offset = p;
     }
     return 1;
+}
+
+bool AimSuppressesAutoCenter(char* controller) {
+    if (!g_installed || GetConfig().aim_auto_center) {
+        return false;
+    }
+    __try {
+        return AimMode(controller);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 bool GyroAimEnabled() { return g_gyro != 0; }

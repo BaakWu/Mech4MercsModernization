@@ -42,6 +42,10 @@ constexpr float kSnap = 0.02f;             // below this the throttle is 0
 
 using Drive_t = void(__thiscall*)(void*, double);
 Drive_t g_drive = nullptr;
+// options.ini [special commands] autotorsocenter as the drive step reads it
+// (0 off, 1 / 2 the automatic centering modes; 2 = after a delay). Read once
+// per frame at the start of the step's centering block (3.1c 0x0054FCB5).
+int* g_auto_center = nullptr;
 
 constexpr size_t kMinForward = 0x64C;      // float, smallest forward throttle (>0)
 
@@ -55,7 +59,19 @@ float Clamp(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v
 
 void __fastcall Hook_Drive(char* self, void*, double now) {
     const float before = *reinterpret_cast<float*>(self + kThrottle);
+    // Mouse aim point (issue #31): aiming must not turn the 'Mech. The
+    // automatic centering turns the legs toward the torso, so the step sees
+    // it off while aim mode is in use; the explicit Center commands
+    // (controller +0x6D0) do not depend on it and keep working.
+    int* const auto_center = g_auto_center && AimSuppressesAutoCenter(self) ? g_auto_center : nullptr;
+    const int auto_center_mode = auto_center ? *auto_center : 0;
+    if (auto_center) {
+        *auto_center = 0;
+    }
     g_drive(self, now);
+    if (auto_center) {
+        *auto_center = auto_center_mode;
+    }
 
     float t = *reinterpret_cast<float*>(self + kThrottle);
     const bool forward = *reinterpret_cast<int*>(self + kForwardHeld) > 0;
@@ -324,11 +340,21 @@ bool InstallControlsHooks() {
         return false;  // not unpacked yet; retry
     }
     g_installed = true;
+    // The centering block of the drive step: mov eax, [autotorsocenter];
+    // cmp eax, 1; je ...; mov edx, [esi+6D0h]; cmp edx, 1.
+    if (unsigned char* center = FindUnique(
+            "auto_torso_center",
+            "A1 ?? ?? ?? ?? 83 F8 01 0F 84 ?? ?? ?? ?? 8B 96 D0 06 00 00 83 FA 01")) {
+        if (center > drive && center < drive + 0x1000) {
+            g_auto_center = *reinterpret_cast<int**>(center + 1);
+        }
+    }
     // push ecx; fld qword [esp+8] = 5 bytes, position independent.
     InstallDetour(drive, 5, reinterpret_cast<void*>(&Hook_Drive),
                   reinterpret_cast<void**>(&g_drive));
-    Log("controls: drive hook %s (mw5 %d, throttle decay %d)\n", g_drive ? "ok" : "FAILED",
-        GetConfig().controls_mw5 ? 1 : 0, static_cast<int>(g_decay));
+    Log("controls: drive hook %s (mw5 %d, throttle decay %d, auto-center flag %s)\n",
+        g_drive ? "ok" : "FAILED", GetConfig().controls_mw5 ? 1 : 0, static_cast<int>(g_decay),
+        g_auto_center ? "found" : "not found");
     return true;
 }
 

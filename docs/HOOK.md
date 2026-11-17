@@ -379,14 +379,27 @@ step (which computes the torso keys and auto-centering), the hook:
 
 It works with the game's other torso controls:
 
-- **Auto-centering** (`options.ini [special commands] autotorsocenter`; the
-  default 2 means "after a delay") turns the *legs* toward the torso and, in
-  the same step, counter-rotates the torso (`+0x2DC` and `+0x2E4`,
-  `0x0054FD10`). The hook keeps that counter-rotation and moves the aim point
-  with it, so the aim holds still in the world while the legs catch up. This
-  was verified on the HUD compass: a 4° flick changed the heading 1° → 5°,
-  and it stayed at 5° through 6 s of leg centering. An earlier build
-  overrode the counter-rotation and the legs chased the torso in a slow spin.
+- **Auto-centering is off in aim mode** (issue #31). The game's automatic
+  centering (`options.ini [special commands] autotorsocenter`; the default 2
+  means "after a delay") turns the *legs* toward the torso and, in the same
+  step, counter-rotates the torso (`+0x2DC` and `+0x2E4`, `0x0054FD10`). With
+  an aim point this read as the 'Mech turning by itself whenever the player
+  aimed. The centering block of the drive step reads the mode from one
+  global (`mov eax, [0x011D0BC0]` at `0x0054FCB5`, pattern
+  `A1 ?? ?? ?? ?? 83 F8 01 0F 84 ?? ?? ?? ?? 8B 96 D0 06 00 00 83 FA 01`),
+  so while aim mode is in use the drive hook sets it to 0 for the call and
+  restores it afterwards. Nothing in the code is patched and `options.ini`
+  is unchanged. Mode 0 still runs the explicit commands: the centering
+  state `+0x6D0` (1 / 2) is checked next to the mode, bypasses the delay
+  (`+0x6D4` against the tuning value at `+0x8C`), and is cleared when the
+  torso is centered. So **Center Legs To Torso** and **Center Torso To
+  Legs** keep working.
+
+  `[aim] auto_center=1` restores the earlier behavior: the hook keeps the
+  counter-rotation and moves the aim point with it, so the aim holds still
+  in the world while the legs catch up (verified on the HUD compass: a 4°
+  flick changed the heading 1° → 5°, and it stayed at 5° through 6 s of leg
+  centering).
 - **Torso keys** (held counters `+0x464`..`+0x470`) and **Center Torso**
   (`+0x6D0`) drive the torso as usual. The aim point follows the torso while
   they are in use.
@@ -396,7 +409,8 @@ It works with the game's other torso controls:
 **Gyro Aim** (issue #17). An On/Off switch on Options > Game, below Throttle
 Decay. It is only added when `track_pointer` is installed, uses option id 203
 and is saved as `[aim] gyro=` (off by default; the installer keeps it on
-Update). While the legs turn, from A/D or auto-centering, the aim point keeps
+Update). While the legs turn, from A/D or Center Legs To Torso (or
+auto-centering with `[aim] auto_center=1`), the aim point keeps
 its direction in the world:
 
 - The legs' heading is read from the mech's rotation matrix:

@@ -880,7 +880,7 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1, in
         SetIniValue(text, "campaign", "full_company", use_company ? "1" : "0");
         // Player tuning kept from an existing install.
         if (FileExists(existing)) {
-            for (const wchar_t* key : {L"sensitivity", L"marker", L"gyro"}) {
+            for (const wchar_t* key : {L"sensitivity", L"marker", L"gyro", L"auto_center"}) {
                 wchar_t value[64] = {};
                 GetPrivateProfileStringW(L"aim", key, L"", value, 64, existing.c_str());
                 if (value[0]) {
