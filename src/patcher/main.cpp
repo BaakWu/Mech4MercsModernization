@@ -756,14 +756,24 @@ bool PromptYesNo(const wchar_t* question) {
     return buffer[0] == L'y' || buffer[0] == L'Y';
 }
 
-// The [controls] mw5 value in an installed mw4hook.ini: 1, 0, or -1 when
-// there is no such file or key.
-int InstalledMw5(const std::wstring& install) {
+// A value in an installed mw4hook.ini: its number, or -1 when there is no
+// such file or key.
+int InstalledIniInt(const std::wstring& install, const wchar_t* section, const wchar_t* key) {
     const std::wstring path = Join(install, kIniName);
     if (!FileExists(path)) {
         return -1;
     }
-    return static_cast<int>(GetPrivateProfileIntW(L"controls", L"mw5", -1, path.c_str()));
+    return static_cast<int>(GetPrivateProfileIntW(section, key, -1, path.c_str()));
+}
+
+// [controls] mw5: MechWarrior 5-style controls.
+int InstalledMw5(const std::wstring& install) {
+    return InstalledIniInt(install, L"controls", L"mw5");
+}
+
+// [campaign] full_company: 7 lancemates in campaign missions (issue #21).
+int InstalledFullCompany(const std::wstring& install) {
+    return InstalledIniInt(install, L"campaign", L"full_company");
 }
 
 // Sets "key=value" inside "[section]" of an ini held as text (CRLF lines).
@@ -800,9 +810,10 @@ void SetIniValue(std::string& text, const std::string& section, const std::strin
 }
 
 // mw5: 1 / 0 = MW5-style controls on / off; -1 = keep the installed value
-// (off on a first install). The Throttle Decay choice made in the game
+// (off on a first install). company: the same for the full company of 7
+// lancemates in campaign missions. The Throttle Decay choice made in the game
 // (Options > Game, saved in mw4hook.ini) is kept across re-installs.
-int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1) {
+int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1, int company = -1) {
     Print(L"mw4patch %ls - install\n", kToolVersion);
     Print(L"Install: %ls\n\n", install.c_str());
 
@@ -854,6 +865,8 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1) {
     {
         const int installed_mw5 = InstalledMw5(install);
         const bool use_mw5 = mw5 >= 0 ? mw5 != 0 : installed_mw5 == 1;
+        const bool use_company =
+            company >= 0 ? company != 0 : InstalledFullCompany(install) == 1;
         const std::wstring existing = Join(install, kIniName);
         const int decay = FileExists(existing)
                               ? static_cast<int>(GetPrivateProfileIntW(L"controls", L"decay", 0,
@@ -864,6 +877,7 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1) {
         SetIniValue(text, "controls", "decay", decay ? "1" : "0");
         // The mouse aim point is part of the MW5-style controls choice.
         SetIniValue(text, "aim", "track_pointer", use_mw5 ? "1" : "0");
+        SetIniValue(text, "campaign", "full_company", use_company ? "1" : "0");
         // Player tuning kept from an existing install.
         if (FileExists(existing)) {
             for (const wchar_t* key : {L"sensitivity", L"marker", L"gyro"}) {
@@ -880,6 +894,7 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1) {
         }
         ini.assign(text.begin(), text.end());
         Print(L"MechWarrior 5-style controls: %ls\n", use_mw5 ? L"on" : L"off");
+        Print(L"Full company in campaign missions: %ls\n", use_company ? L"on" : L"off");
     }
     std::string dinputHash;
     std::string ddrawHash;
@@ -1404,7 +1419,8 @@ int CommandInfo(const std::wstring& install) {
 void PrintUsage() {
     Print(L"mw4patch %ls\n", kToolVersion);
     Print(L"Usage:\n");
-    Print(L"  mw4patch.exe install   [install-dir] [--yes] [--mw5 | --no-mw5]\n");
+    Print(L"  mw4patch.exe install   [install-dir] [--yes] [--mw5 | --no-mw5]\n"
+          L"                         [--full-company | --no-full-company]\n");
     Print(L"  mw4patch.exe uninstall [install-dir] [--yes]\n");
     Print(L"  mw4patch.exe verify    [install-dir]\n");
     Print(L"  mw4patch.exe info      [install-dir]\n");
@@ -1562,6 +1578,7 @@ enum : int {
     kIdWindowed,
     kIdDecay,
     kIdMw5,
+    kIdCompany,
     kIdLog,
     kIdInstall,
     kIdUninstall,
@@ -1575,6 +1592,7 @@ HWND g_wnd = nullptr;
 HWND g_folder = nullptr;
 HWND g_status = nullptr;
 HWND g_mw5 = nullptr;
+HWND g_company = nullptr;
 HWND g_log = nullptr;
 HWND g_install = nullptr;
 HWND g_uninstall = nullptr;
@@ -1643,6 +1661,8 @@ void UpdateState() {
     SetWindowTextW(g_status, status);
     if (g_installed) {
         SendMessageW(g_mw5, BM_SETCHECK, InstalledMw5(dir) == 1 ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendMessageW(g_company, BM_SETCHECK,
+                     InstalledFullCompany(dir) == 1 ? BST_CHECKED : BST_UNCHECKED, 0);
     }
     SetWindowTextW(g_install, g_installed ? L"Update" : L"Install");
     EnableWindow(g_install, g_supported && !g_busy);
@@ -1650,6 +1670,7 @@ void UpdateState() {
     EnableWindow(g_browse, !g_busy);
     EnableWindow(g_folder, !g_busy);
     EnableWindow(g_mw5, !g_busy);
+    EnableWindow(g_company, !g_busy);
 }
 
 void Browse() {
@@ -1696,6 +1717,9 @@ bool RestartAsAdmin(const std::wstring& dir) {
     if (SendMessageW(g_mw5, BM_GETCHECK, 0, 0) == BST_CHECKED) {
         params += L" --mw5";
     }
+    if (SendMessageW(g_company, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+        params += L" --full-company";
+    }
     SHELLEXECUTEINFOW info{};
     info.cbSize = sizeof(info);
     info.lpVerb = L"runas";
@@ -1725,12 +1749,13 @@ void Run(int action) {
         return;
     }
     const bool mw5 = SendMessageW(g_mw5, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const bool company = SendMessageW(g_company, BM_GETCHECK, 0, 0) == BST_CHECKED;
     g_busy = true;
     UpdateState();
     SetWindowTextW(g_log, L"");
-    std::thread([dir, mw5, action]() {
+    std::thread([dir, mw5, company, action]() {
         CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        const int result = action == 1 ? CommandInstall(dir, true, mw5 ? 1 : 0)
+        const int result = action == 1 ? CommandInstall(dir, true, mw5 ? 1 : 0, company ? 1 : 0)
                                        : CommandUninstall(dir, true);
         CoUninitialize();
         PostMessageW(g_wnd, kMsgDone, static_cast<WPARAM>(result), action);
@@ -1764,6 +1789,10 @@ void Finished(int result, int action) {
         text += L"\n\x2022 MechWarrior 5-style controls: new pilots get them automatically; "
                 L"for an existing pilot press DEFAULT in Options > Controls, then OK";
     }
+    if (SendMessageW(g_company, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+        text += L"\n\x2022 Full company: campaign missions with lancemates take up to 7; "
+                L"the Secondary Lance needs a lance commander";
+    }
     MessageBoxW(g_wnd, text.c_str(), L"Installed", MB_OK | MB_ICONINFORMATION);
 }
 
@@ -1776,7 +1805,7 @@ HWND Child(const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, i
     return hwnd;
 }
 
-void CreateControls(const std::wstring& initial_dir, bool initial_mw5) {
+void CreateControls(const std::wstring& initial_dir, bool initial_mw5, bool initial_company) {
     std::wstring title =
         std::wstring(L"MechWarrior 4 Mercenaries Modernization Patch (") + kToolVersion + L")";
     Child(L"STATIC", title.c_str(), 0, 16, 14, 580, 26, 0, g_title_font);
@@ -1792,7 +1821,7 @@ void CreateControls(const std::wstring& initial_dir, bool initial_mw5) {
                      kIdBrowse);
     g_status = Child(L"STATIC", L"", 0, 16, 126, 580, 20, kIdStatus);
 
-    Child(L"BUTTON", L"Components", BS_GROUPBOX, 16, 154, 580, 212, 0);
+    Child(L"BUTTON", L"Components", BS_GROUPBOX, 16, 154, 580, 252, 0);
     HWND windowed = Child(L"BUTTON", L"Windowed mode and display fixes (required)",
                           BS_AUTOCHECKBOX, 30, 176, 550, 20, kIdWindowed);
     SendMessageW(windowed, BM_SETCHECK, BST_CHECKED, 0);
@@ -1816,15 +1845,22 @@ void CreateControls(const std::wstring& initial_dir, bool initial_mw5) {
           L"throttle, and mouse aiming with an aim point the torso turns to. Leave unticked "
           L"to keep MW4's controls.",
           0, 50, 305, 530, 48, 0);
+    g_company = Child(L"BUTTON", L"Full company in campaign missions (optional, experimental)",
+                      WS_TABSTOP | BS_AUTOCHECKBOX, 30, 350, 550, 20, kIdCompany);
+    SendMessageW(g_company, BM_SETCHECK, initial_company ? BST_CHECKED : BST_UNCHECKED, 0);
+    Child(L"STATIC",
+          L"Campaign missions that allow lancemates allow 7 (the Secondary Lance too), so you "
+          L"field 8 'Mechs. Missions are not rebalanced for it.",
+          0, 50, 371, 530, 32, 0);
 
     g_log = Child(L"EDIT", L"",
-                  WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 16, 376,
-                  580, 112, kIdLog, g_mono);
-    g_install = Child(L"BUTTON", L"Install", WS_TABSTOP | BS_DEFPUSHBUTTON, 288, 500, 96, 30,
+                  WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 16, 418,
+                  580, 114, kIdLog, g_mono);
+    g_install = Child(L"BUTTON", L"Install", WS_TABSTOP | BS_DEFPUSHBUTTON, 288, 544, 96, 30,
                       kIdInstall);
     g_uninstall =
-        Child(L"BUTTON", L"Uninstall", WS_TABSTOP | BS_PUSHBUTTON, 394, 500, 96, 30, kIdUninstall);
-    Child(L"BUTTON", L"Close", WS_TABSTOP | BS_PUSHBUTTON, 500, 500, 96, 30, kIdClose);
+        Child(L"BUTTON", L"Uninstall", WS_TABSTOP | BS_PUSHBUTTON, 394, 544, 96, 30, kIdUninstall);
+    Child(L"BUTTON", L"Close", WS_TABSTOP | BS_PUSHBUTTON, 500, 544, 96, 30, kIdClose);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -1895,9 +1931,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&controls);
 
-    // --dir "<folder>" and --mw5 are passed when restarting as administrator.
+    // --dir "<folder>", --mw5 and --full-company are passed when restarting as
+    // administrator.
     std::wstring dir;
     bool mw5 = false;
+    bool company = false;
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     for (int i = 1; argv && i < argc; ++i) {
@@ -1905,6 +1943,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             dir = argv[++i];
         } else if (_wcsicmp(argv[i], L"--mw5") == 0) {
             mw5 = true;
+        } else if (_wcsicmp(argv[i], L"--full-company") == 0) {
+            company = true;
         }
     }
     if (argv) {
@@ -1914,6 +1954,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         dir = FindGameDir();
         if (!dir.empty()) {
             mw5 = InstalledMw5(dir) == 1;
+            company = InstalledFullCompany(dir) == 1;
         }
     }
 
@@ -1942,7 +1983,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wc.lpszClassName = L"MW4ModernizationPatchSetup";
     RegisterClassExW(&wc);
 
-    RECT rect = {0, 0, gui::S(612), gui::S(546)};
+    RECT rect = {0, 0, gui::S(612), gui::S(590)};
     const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     AdjustWindowRect(&rect, style, FALSE);
     const int width = rect.right - rect.left;
@@ -1952,7 +1993,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                                  (GetSystemMetrics(SM_CYSCREEN) - height) / 2, width, height,
                                  nullptr, nullptr, instance, nullptr);
     g_output_sink = gui::Sink;
-    gui::CreateControls(dir, mw5);
+    gui::CreateControls(dir, mw5, company);
     gui::UpdateState();
     ShowWindow(gui::g_wnd, show);
     UpdateWindow(gui::g_wnd);
@@ -1989,6 +2030,7 @@ int wmain(int argc, wchar_t** argv) {
     std::wstring install;
     bool assumeYes = false;
     int mw5 = -1;
+    int company = -1;
 
     for (int i = 1; i < argc; ++i) {
         std::wstring arg = argv[i];
@@ -1998,6 +2040,10 @@ int wmain(int argc, wchar_t** argv) {
             mw5 = 1;
         } else if (arg == L"--no-mw5") {
             mw5 = 0;
+        } else if (arg == L"--full-company") {
+            company = 1;
+        } else if (arg == L"--no-full-company") {
+            company = 0;
         } else if (arg == L"--help" || arg == L"-h" || arg == L"/?") {
             PrintUsage();
             CoUninitialize();
@@ -2021,7 +2067,7 @@ int wmain(int argc, wchar_t** argv) {
     install = NormalizePath(install);
 
     if (command == L"install") {
-        int result = CommandInstall(install, assumeYes, mw5);
+        int result = CommandInstall(install, assumeYes, mw5, company);
         CoUninitialize();
         return result;
     }

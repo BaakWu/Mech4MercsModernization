@@ -32,6 +32,7 @@ $sources = @(
     'aim.cpp',
     'camo.cpp',
     'sound.cpp',
+    'campaign.cpp',
     'cursor.cpp',
     'detour.cpp',
     'dinput_proxy.cpp',

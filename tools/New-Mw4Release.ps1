@@ -27,7 +27,7 @@ if (-not $NoBuild) {
 # behavior by default.
 $ini = Get-Content (Join-Path $repo 'artifacts\hook\mw4hook.ini') -Raw
 if ($ini -match '(?im)^\s*\[debug\]') { throw 'mw4hook.ini contains a [debug] section.' }
-if ($ini -match '(?im)^\s*(mw5|decay|track_pointer|gyro)\s*=\s*1') { throw 'mw4hook.ini enables an opt-in feature by default.' }
+if ($ini -match '(?im)^\s*(mw5|decay|track_pointer|gyro|full_company)\s*=\s*1') { throw 'mw4hook.ini enables an opt-in feature by default.' }
 
 $setup = Join-Path $repo 'artifacts\MW4Mercs-ModernizationPatch-Setup.exe'
 if (-not (Test-Path $setup)) { throw "Missing build output: $setup" }

@@ -74,6 +74,7 @@ struct Config {
     float aim_sensitivity = 1.0f;    // [aim] sensitivity: multiplier on the game's slider
     bool aim_marker = true;          // [aim] marker: show where the torso is turning to
     bool aim_gyro = false;           // [aim] gyro: initial Gyro Aim setting (Options > Game)
+    bool full_company = false;  // [campaign] full_company: 7 lancemates where 1-6 (#21)
     bool sound_background = true;  // [sound] background: keep playing when unfocused (#26)
     // [mechlab] default_camo: a new pilot's default camouflage code (the first
     // character of MekTek's camouflage name; '_' = None; empty = template's).
@@ -93,6 +94,9 @@ void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWOR
 bool InstallAimHooks();
 void AimAfterDrive(char* controller, double now);
 bool GyroAimEnabled();
+
+// Full company in campaign missions (campaign.cpp, issue #21).
+bool InstallCampaignHooks();
 
 // Audio keeps playing while the window is unfocused (sound.cpp, issue #26).
 bool InstallSoundHooks();

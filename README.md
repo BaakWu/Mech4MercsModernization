@@ -61,6 +61,13 @@ Ticked in the installer:
 
 Leave it unticked to keep MW4's controls. Details in `docs/HOOK.md`.
 
+### Optional: full company in campaign missions (experimental)
+
+Ticked in the installer (issue #21): campaign missions that allow lancemates
+allow **7**, so you can field 8 'Mechs. The pre-mission screen opens the
+**Secondary Lance**; it needs a lance commander, and the pilots and 'Mechs
+come from your company as usual. Missions are not rebalanced for it.
+
 The patch does **not** replace the renderer, reimplement the engine, or
 change the single-player campaign.
 
@@ -276,8 +283,8 @@ See `docs/ROADMAP.md` for the milestone plan. The short version:
 4. Publish releases. **Done** (1.0.0 onward).
 5. Optional MW5-style controls, Throttle Decay, mouse aim point and Gyro Aim.
    **Done.**
-6. Open: 8-'Mech campaign lances (#21), campaign co-op (#16), AntiHack and
-   multiplayer verification (#12).
+6. 8-'Mech campaign lances (#21), optional. **Done** (experimental).
+7. Open: campaign co-op (#16), AntiHack and multiplayer verification (#12).
 
 ## Legal
 

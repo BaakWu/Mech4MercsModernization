@@ -66,6 +66,7 @@ void LoadConfig() {
     g_config.aim_sensitivity = (sensitivity > 0.05f && sensitivity < 20.0f) ? sensitivity : 1.0f;
     g_config.aim_marker = GetPrivateProfileIntW(L"aim", L"marker", 1, path) != 0;
     g_config.aim_gyro = GetPrivateProfileIntW(L"aim", L"gyro", 0, path) != 0;
+    g_config.full_company = GetPrivateProfileIntW(L"campaign", L"full_company", 0, path) != 0;
     g_config.sound_background = GetPrivateProfileIntW(L"sound", L"background", 1, path) != 0;
     // "None" (or "_") = no camouflage; otherwise the camouflage's code, the
     // first character of its MechLab name (e.g. "a" for "a-Snow - SnowBall").

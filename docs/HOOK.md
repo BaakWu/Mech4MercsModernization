@@ -480,6 +480,59 @@ Verified:
 - Update on that pilot opened at "1-Ops - Red". Changing it to
   "2-Ops - Gold" queued Gold for its next new 'Mech.
 
+### Full company in campaign missions (`[campaign] full_company=1`; issue #21)
+
+Opt-in (an installer checkbox, off by default, experimental). Campaign
+missions that allow lancemates allow the full company of **7** (8 'Mechs with
+the player): the pre-mission screen opens the **Secondary Lance** column and
+those lancemates drop at the mission's `SecondaryLanceStart` drop zone. Every
+campaign mission already has that drop zone; MekTek's own campaign uses it
+for its two-lance missions. Missions without lancemates (0) stay solo.
+
+Each campaign mission has a record built from the campaign definition's
+`NumLancemates` key (compiled at 3.1c `0x0059AEB6`); the count is at
+`record+0x40`. Everything that limits a mission's lance reads it there:
+
+- Shell command 30, `ShellCampaignGetMissionRegionData` (`0x00514CF0`),
+  argument 7: the number of lancemate slots the pre-mission screen builds;
+- the lance tonnage (`0x00626A70`): slots 0-3 are the first lance, 4-7 the
+  second, walked up to `NumLancemates`; with the stock 3 the second lance
+  never counts;
+- the launch.
+
+All of them get the record from one lookup, `CampaignMissionById`
+(`0x0059A960`: walk the campaign's mission list for `record+0x38 == id`). The
+hook detours its first 7 bytes (`mov ecx,[ecx+10h]; mov edx,[esp+4]`),
+lets it run, and raises a count of 1-6 to 7 in the record it returns. The
+record is the campaign's in-memory definition, not part of the save.
+
+**Empty second-lance drop zones.** A drop zone hands out positions from its
+markers (`DropZoneNextPosition`, `0x004E61F0`: cycle the marker list at
+`zone+0x174`, return the first clear spot); a zone without markers returns
+the zone object's own location. Stock missions take at most the first lance
+(4 'Mechs), so a mission's `SecondaryLanceStart` is never used in the stock
+game, and in some missions it has no markers: Tharkad - Checkmate's is empty
+(`PlayerStart` has 4). With the full company the second lance then dropped
+far from the player, listed on the HUD roster but not on the radar. With
+`full_company=1` the hook also detours `DropZoneNextPosition` (6 bytes,
+`sub esp,0A0h`) for the player / lancemate spawn only (the call at
+`0x00533520`, matched by return address; enemy and other spawns are not
+touched). It records the positions the first lance gets; when a lancemate's
+zone has no markers, the 'Mech is placed beside one of them instead, 40 m
+sideways per extra 'Mech, facing the same way. Verified in Checkmate with the full company (7 lancemates): four `drop zone has no positions; 'Mech placed 40 m beside the
+first lance` lines, and all the lancemates on the radar around the player.
+
+The game's own rules still apply: the Secondary Lance needs a lance commander
+(a pilot who can lead; launch error 3307 otherwise), and the lancemates come
+from the company's roster, so the extra lance needs hired pilots and 'Mechs.
+Missions are not rebalanced for the extra 'Mechs.
+
+Verified (2026-11-17) on an existing campaign save, Eaton - Merc Alley (stock
+`NumLancemates` 3): the log shows `campaign: mission 31323 lancemates 3 -> 7`,
+the Secondary Lance column accepts a commander, and in the mission the HUD's
+lance roster lists the secondary lancemate under the divider (Rufus, Shredder
+| Hannibal).
+
 ### Selected resolution
 
 The Resolution dropdown is filled by `ShellGetSupportedResolutions` from a
@@ -536,6 +589,8 @@ game's handler sees it.
 | keyboard drive step | `0x0054F2A0` | 5-byte detour (MW5 throttle, Throttle Decay, aim point) |
 | mouse step | `0x0054EDA0` | 5-byte detour (aim point; pass-through when off) |
 | new-'Mech skin copy | `0x00625E39`, `0x00625967` | 6-byte detours (a new pilot's default camouflage) |
+| campaign mission lookup | `0x0059A960` | 7-byte detour (full company, opt-in) |
+| drop zone next position | `0x004E61F0` | 6-byte detour (lancemates in an empty drop zone, full company) |
 
 The last three are COM vtable hooks inside the `ddraw.dll` proxy; nothing in
 `MW4Mercs.exe` is patched for them.
@@ -567,6 +622,10 @@ marker=1        ; small circle at the aim point (always shown in aim mode)
 gyro=0          ; Gyro Aim (Options > Game; written there)
 [mechlab]
 default_camo=None ; a new pilot's camouflage (code char, or None; empty = Pink)
+[campaign]
+full_company=0 ; 7 lancemates in campaign missions that allow 1-6 (opt-in)
+[sound]
+background=1  ; keep the audio playing when the window is not focused
 [frontend]
 stretch=1     ; scale the picture into the window
 [log]

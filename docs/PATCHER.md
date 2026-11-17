@@ -24,12 +24,16 @@ One window:
     (new pilots get it automatically; existing pilots via DEFAULT in
     Options > Controls) and the mouse aim point. Unticked keeps MW4's
     controls.
+  - *Full company in campaign missions* (optional, experimental; writes
+    `[campaign] full_company=1`): campaign missions that allow lancemates
+    allow 7, including the Secondary Lance (issue #21).
 - **Install** (shows **Update** when already installed), **Uninstall**,
   **Close**, and a log of the install output.
 
 Install/uninstall run on a worker thread; the result is shown in a message
 box. If the folder is not writable (Program Files), the installer offers to
-restart itself elevated (`runas`, passing `--dir "<folder>"` and `--mw5`).
+restart itself elevated (`runas`, passing `--dir "<folder>"`, `--mw5` and
+`--full-company`).
 
 **Update** re-runs install over an existing install:
 
@@ -62,8 +66,8 @@ On install it:
    `windowed=true` (the Options > Video > Windowed checkbox; see
    `docs/HOOK.md`),
 6. extracts `dinput.dll`, `ddraw.dll`, and `mw4hook.ini` (with `[controls]
-   mw5` set from the MW5 choice and `decay` carried over from an existing
-   install),
+   mw5` set from the MW5 choice, `[campaign] full_company` from the full
+   company choice, and `decay` carried over from an existing install),
 7. creates `MechWarrior 4 Mercenaries (Windowed).lnk` and updates the existing
    `Shortcut to MW4Mercs.exe.lnk` to use `-window`,
 8. writes `mw4patch-install.ini` with installed hashes and backup names.
@@ -97,13 +101,15 @@ The console waits for Enter before closing so the result can be read.
 
 ```text
 mw4patch.exe install   [install-dir] [--yes] [--mw5 | --no-mw5]
+                       [--full-company | --no-full-company]
 mw4patch.exe uninstall [install-dir] [--yes]
 mw4patch.exe verify    [install-dir]
 mw4patch.exe info      [install-dir]
 ```
 
 If `install-dir` is omitted, the current directory is used. Without `--mw5` /
-`--no-mw5`, install keeps the installed MW5 setting (off on a first install).
+`--no-mw5`, install keeps the installed MW5 setting (off on a first install);
+the same for `--full-company` / `--no-full-company`.
 
 Examples:
 

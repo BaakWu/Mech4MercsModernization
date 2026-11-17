@@ -29,6 +29,9 @@ or asks for the game folder, verifies 3.1c, and installs:
   Options > Game),
 - optionally the MechWarrior 5-style controls (`[controls] mw5`), for players
   who want them; unticked keeps MW4's controls.
+- optionally the full company in campaign missions (`[campaign]
+  full_company`, issue #21, experimental): 7 lancemates where a mission
+  allows any.
 
 It backs up what it changes, writes an install record, updates an existing
 install in place (keeping the player's Throttle Decay choice), and
