@@ -253,6 +253,16 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
             }
             return 1;
         }
+        if (option == kMwoMechClass) {
+            // MechLab weight-class filter (shellscript.cpp), kept per session.
+            static int s_class = 0;
+            if (cmd == kShellGetOptionValue) {
+                *value = s_class;
+            } else {
+                s_class = (*value >= 0 && *value <= 5) ? *value : 0;
+            }
+            return 1;
+        }
         if (option == kMwoGyroAim) {
             if (cmd == kShellGetOptionValue) {
                 *value = GyroAimEnabled() ? 1 : 0;

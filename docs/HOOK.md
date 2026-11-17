@@ -494,6 +494,20 @@ MekTek's per-pilot default, Options > Multiplayer > Skin.
   **None** with stock paint (the log showed the skin switched from '7' to
   '_'). Without the fix the same Flea showed "7-Ops - Pink".
 
+**Salvage (issue #29).** Salvaged 'Mechs are created by the mission
+scripts' `addmechinstancesalvage` / `...damaged` / `...crippled` (ABL
+natives `0x0057BD50` / `0x0057CAB0` / `0x0057CBB0`, registered at
+`0x0066A61F`...), which all create the 'Mech with `0x00625B90`, so they pass
+through the hooked copy at `0x00625E36`; nothing writes the skin byte
+afterwards. They came out pink because the pilot's skin reads as the
+template's '7' again after a mission, while the choice was applied only once
+(at the pilot's first new 'Mech; purchases in the same session still had
+it). Now, for a pilot with a recorded choice (`[camo]`, from Join Regiment
+or Update), every new 'Mech whose skin would be '7' gets that choice. Any
+other skin (for example one picked on Options > Multiplayer > Skin) is left
+alone, and existing 'Mechs keep their paint. Salvage is random, so this was
+verified by reading the code path, not by a scripted test.
+
 **Choosing it in Join Regiment.** Roster > New > Join Regiment gets a
 **Camouflage** list below Difficulty.
 
@@ -605,6 +619,94 @@ keeps the game's copy (`0x0081B9EC/F0`) in sync, and writes `screenwidth` /
 `MWO_USEEXTENDEDVISIBILITY` case and overwrites that option with the
 resolution index. The hook preserves Use Extended Visibility across the call.
 
+### MechLab weight-class filter (`[mechlab] class_filter=1`; issue #28)
+
+The MechLab's Chassis tab gets a **Class** droplist beside the chassis list,
+laid out like a form row: "Type:" over the list (now two thirds of the row)
+and "Class:" over the droplist (the last third): All / Light / Medium /
+Heavy / Assault / Elemental. **Elemental** holds everything whose name starts
+with `-` (battle armour: -Elemental, -Golem, ...) or `~` (Clan and IS
+infantry) and is listed last, as the least likely choice. The droplist only
+offers the classes present in the list, so in the campaign it shows just
+the classes of the company's 'Mechs. It narrows the chassis list -
+in Instant Action and multiplayer the **Type** list (one row per chassis,
+about 130 with MekTek's 'Mech paks, alphabetical, 17 rows at a time and no
+mouse wheel), in the campaign the list of the company's 'Mechs. The choice is
+kept for the session (hook option 206). Choosing a class loads that class's
+first 'Mech, as picking it in the list would ("All" keeps the current one);
+picking from a filtered list loads the 'Mech exactly as before.
+
+The list is `cm_mechlistbox` (`cm_listboxes.script`). The rest of the
+MechLab works with the widget's row numbers (`nSelected`, `list_item[]`) in
+about 40 places, so the filter is inside the widget rather than in
+`chassis.script`:
+
+- The widget keeps a list of visible rows, `vis[0..vis_count)`, built in
+  `GUI_INIT`. Scrolling, the thumb, the keys, the highlight and the drawing
+  use `vis_count` and `vis[row]` (every `list_size` use in the widget except
+  its declaration is renamed `vis_count`); a pick sets `nSelected =
+  vis[lit]`, the original row.
+- With `filter_class < 0` - the default, and always in the other screens that
+  use the widget (pre-mission, Command Center, campaign screen) - `vis` is
+  the identity and every handler starts with `vis_count = list_size`, so the
+  widget behaves exactly as stock.
+- A row starting with `-` or `~` is class 4 (Elemental). Otherwise its
+  class: the row name and the chassis names (string 4500 + id of
+  `ScriptStrings_MERCS.dll`) are compared without spaces, `_` and `-` (the
+  list writes "Black Heart" and "-Elemental" where the strings say
+  "Blackheart" and "Elemental"; `equal$` ignores case), longest prefix first,
+  and the class is MekTek's own `mechWeightClassArray[id]` from
+  `MechWeight.script` (the MechBay's `mech_info` object,
+  `@MechBay_main@mechinfo`). Rows with no match (a 'Mech renamed to
+  something else) stay visible in every class. The normalised chassis names
+  are built once, the first time a filter is used. With `count_classes`
+  set (by `chassis.script`) the widget classifies every row on each
+  `GUI_INIT` into `row_class[]` and `class_present[0..4]`, from which the
+  droplist is built.
+- `chassis.script`: the list's `itemWidth` goes from 269 to 170 and the
+  droplist (75 + 16 wide, label "Class:") is added at x 216 on the list's
+  row (y 135, `boxy + 55` in the campaign), after the Camouflage list. Its
+  handler stores the choice (`ShellSetOptionValue` 206), sets
+  `filter_class`, re-initialises the list and, for a class, mails the list
+  -77: the widget then picks its first visible row through its own pick path
+  (it mails the MechLab as a click does), so the 'Mech loads normally. The
+  droplist is hidden and shown with the rest of the tab (added next to the
+  list in the tab's `GUI_DEACTIVATE` / `GUI_ACTIVATE`); without that it
+  stayed on screen over the Weapons tab.
+
+Both scripts are rewritten in memory when they are decompressed (member
+fetch hook); if an anchor is not found the file is left stock.
+
+Verified (2026-11-17), Instant Action MechLab: Light lists the battle armour
+and light 'Mechs (Brigand, Commando, Cougar, Flea, ...), Medium (Arctic Wolf,
+Assassin II, Black Hawk, Centurion, Chimera, ...), Heavy (Archer, Ares,
+Argus, Avatar, Black Heart, ...); picking Avatar from the Heavy list loaded
+Avatar (70 t); choosing Assault loaded Annihilator 4CUAC20 (100 t) and the
+Type list showed only assault chassis. Campaign MechLab: Light shows
+osiris1, wolfhound2 and wolfhound3 and hides chimera4.
+
+### Main Menu badge (`[frontend] badge=1`; issue #24)
+
+The Main Menu shows a two-line badge in the empty recessed plate at the
+bottom left of the frame, opposite MekTek's badge: **MODERNIZED** (muted
+yellow, the frame's hazard-stripe colour) over **PATCH v1.6.0** (grey). The
+version is `tool_version` from the install record (`mw4patch-install.ini`)
+next to the game, so it always shows the installed release; a development
+install without a record shows just "PATCH".
+
+It is added the same way as the Windowed checkbox: when
+`mercsshellscripts\MainMenu.script` is decompressed, the member fetch hook
+inserts two `s_Text` labels after `initialize(mt_unk_button)` and an
+`#include` of `c_Text.script` (where `s_Text` lives; the Main Menu does not
+include it, and without it the menu stops on a script error). The labels use
+the menus' smallest MicroStyle font, font 55 (`microstyle8bold`), centred in
+a 90-pixel box at x 27, y 514 / 526, depth 120 - over the straight part of
+the grey plate, clear of its yellow trim (the 10- and 14-pixel fonts ran
+into it or were cut off). Depth: higher is in front, and the frame is at
+100, so the plate is frame art; at depth 40 the labels were hidden behind it.
+The text is part of the 800x600 menu picture, so the menu upscaler scales it
+with everything else. `[frontend] badge=0` leaves the Main Menu as it was.
+
 ### Windowed checkbox
 
 The Video tab is `mercsshellscripts\OM_Video.script` in `RESOURCE\props.mw4`
@@ -679,6 +781,7 @@ sensitivity=1.0 ; aim point speed (x the game's mouse sensitivity slider)
 marker=1        ; small circle at the aim point (always shown in aim mode)
 gyro=0          ; Gyro Aim (Options > Game; written there)
 [mechlab]
+class_filter=1 ; MechLab Class droplist (All/Light/Medium/Heavy/Assault)
 default_camo=None ; a new pilot's camouflage (code char, or None; empty = Pink)
 [campaign]
 full_company=0 ; 7 lancemates in campaign missions that allow 1-6 (opt-in)
@@ -689,6 +792,7 @@ names=1       ; roster 'Mech names redrawn from the MicroStyle font
 background=1  ; keep the audio playing when the window is not focused
 [frontend]
 stretch=1     ; scale the picture into the window
+badge=1       ; Main Menu "MODERNIZED / PATCH vX.Y.Z" badge (bottom left)
 [log]
 enabled=1     ; mw4hook-<pid>.log and mw4hook-ddraw-<pid>.log
 ```

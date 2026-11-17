@@ -31,6 +31,9 @@ MemberFetch_t g_member_fetch = nullptr;
 constexpr char kTargetName[] = "mercsshellscripts\\OM_Video.script";
 constexpr char kGameTarget[] = "mercsshellscripts\\OM_Game.script";
 constexpr char kJoinTarget[] = "mercsshellscripts\\JoinRegimentModal.script";
+constexpr char kMainMenuTarget[] = "mercsshellscripts\\MainMenu.script";
+constexpr char kListBoxSuffix[] = "\\cm_listboxes.script";
+constexpr char kChassisSuffix[] = "\\chassis.script";
 constexpr char kMarker[] = "MW4HOOK_WINDOWED";
 
 // Entry layout (3.1c, matches the retail oracle's FUN_00413480/00413830).
@@ -420,6 +423,328 @@ void DumpScript(const unsigned char* entry) {
     }
 }
 
+// The installed patch version from the install record next to the game
+// (mw4patch-install.ini, tool_version=...); empty for a development install.
+std::string InstalledVersion() {
+    char path[MAX_PATH];
+    DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
+    char* slash = n ? strrchr(path, '\\') : nullptr;
+    if (!slash) {
+        return {};
+    }
+    strcpy_s(slash + 1, MAX_PATH - (slash + 1 - path), "mw4patch-install.ini");
+    HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return {};
+    }
+    char buffer[8192] = {};
+    DWORD read = 0;
+    ReadFile(file, buffer, sizeof(buffer) - 1, &read, nullptr);
+    CloseHandle(file);
+    const char* key = strstr(buffer, "tool_version=");
+    if (!key) {
+        return {};
+    }
+    std::string version;
+    for (const char* p = key + 13; *p && version.size() < 16; ++p) {
+        if ((*p >= '0' && *p <= '9') || *p == '.') {
+            version += *p;
+        } else {
+            break;
+        }
+    }
+    return version;
+}
+
+// Main Menu (issue #24): a "MODERNIZED / PATCH vX.Y.Z" badge in the empty
+// recessed plate at the bottom left of the frame, opposite MekTek's badge -
+// two s_Text labels in the menus' own MicroStyle fonts (font 55 =
+// microstyle8bold, the smallest), over the straight part of the plate, in front of the frame
+// (depth 100; the plate is mt_unk_button at 10,475; higher depth is in front).
+void InjectMainMenuBadge(char* data, size_t size) {
+    std::string text(data, size);
+    if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
+        return;
+    }
+    const std::string version = InstalledVersion();
+    const std::string second = version.empty() ? "PATCH" : "PATCH v" + version;
+    const std::string block =
+        "object oMwmA = s_Text\r\n"
+        "oMwmA.location = 27,514,120\r\n"
+        "oMwmA.nFontID = 55\r\n"
+        "oMwmA.szText = \"MODERNIZED\"\r\n"
+        "oMwmA.cTextColor = 0xffd8a424\r\n"
+        "oMwmA.nJustify = 1\r\n"
+        "oMwmA.nLayoutWidth = 90\r\n"
+        "oMwmA.nLayoutHeight = 12\r\n"
+        "initialize(oMwmA)\r\n"
+        "object oMwmB = s_Text\r\n"
+        "oMwmB.location = 27,526,120\r\n"
+        "oMwmB.nFontID = 55\r\n"
+        "oMwmB.szText = \"" + second + "\"\r\n"
+        "oMwmB.cTextColor = 0xffc4c4c4\r\n"
+        "oMwmB.nJustify = 1\r\n"
+        "oMwmB.nLayoutWidth = 90\r\n"
+        "oMwmB.nLayoutHeight = 12\r\n"
+        "initialize(oMwmB)\r\n";
+    // s_Text lives in c_Text.script, which the Main Menu does not include.
+    if (!InsertAfterLine(&text, "initialize(mt_unk_button)", block) ||
+        !InsertAfterLine(&text, "mektek_version.script\"",
+                         "#include \"Content\\\\MercsShellScripts\\\\c_Text.script\"\r\n")) {
+        Log("script: MainMenu.script anchor not found; badge not added\n");
+        return;
+    }
+    WriteBack(data, size, text, "MainMenu.script", "Modernization badge");
+}
+
+// ---------------------------------------------------------------------------
+// MechLab weight-class filter (issue #28).
+//
+// The MechLab's chassis list (Instant Action / multiplayer: "Type", one row
+// per chassis; campaign: the owned 'Mechs) is cm_mechlistbox, a list widget
+// in cm_listboxes.script. The rest of the MechLab works with the widget's row
+// numbers (nSelected, list_item[]) in about 40 places, so the filter lives in
+// the widget: it keeps a list of visible rows, vis[0..vis_count), and scrolls,
+// highlights and draws those; a pick still sets nSelected to the original
+// row. With filter_class < 0 (the default, and in every other screen that
+// uses the widget) vis is the identity and vis_count = list_size, so the
+// widget behaves exactly as before.
+//
+// A row's class: its name is matched against the chassis names, string
+// 4500 + id, both without spaces, '_' and '-' (the list writes "Black Heart"
+// and "-Elemental" where the strings say "Blackheart" and "Elemental"); the
+// longest prefix wins ("Mad Cat Mark II" over "Mad Cat"). It is looked up in
+// MekTek's own
+// mechWeightClassArray[id] (MechWeight.script, 0 Light .. 3 Assault) on the
+// MechBay's mech_info object. Rows with no match (e.g. a renamed 'Mech) stay
+// visible.
+//
+// chassis.script narrows the list to two thirds of its row and puts a
+// "Class:" droplist (All / Light / Medium / Heavy / Assault / Elemental -
+// battle armour '-' and infantry '~' - only the classes present) in the last
+// third; choosing a class loads that class's first 'Mech (the widget picks
+// its first visible row when its owner mails it -77). The choice is kept by
+// the hook for the session (option kMwoMechClass).
+
+// Inserts `block` after the line holding the first '{' that follows `anchor`.
+bool InsertInsideBlock(std::string* text, const char* anchor, const std::string& block,
+                       size_t from = 0) {
+    size_t at = text->find(anchor, from);
+    if (at == std::string::npos) {
+        return false;
+    }
+    size_t brace = text->find('{', at);
+    if (brace == std::string::npos) {
+        return false;
+    }
+    size_t eol = text->find('\n', brace);
+    if (eol == std::string::npos) {
+        return false;
+    }
+    text->insert(eol + 1, block);
+    return true;
+}
+
+int ReplaceAll(std::string* text, const std::string& from, const std::string& to) {
+    int n = 0;
+    for (size_t at = text->find(from); at != std::string::npos;
+         at = text->find(from, at + to.size())) {
+        text->replace(at, from.size(), to);
+        ++n;
+    }
+    return n;
+}
+
+// Script lines that set mwt to `var` without spaces, '_' and '-'.
+#define MW_SQUEEZE(var)                                                          \
+    "mwt = \"\"\r\n"                                                             \
+    "for (mwj = 0; mwj < length$(" var "); mwj++)\r\n{\r\n"                     \
+    "mwc = mid$(" var ", mwj, mwj + 1)\r\n"                                      \
+    "if (equal$(mwc, \" \") != true)\r\n{\r\n"                                   \
+    "if (equal$(mwc, \"_\") != true)\r\n{\r\n"                                   \
+    "if (equal$(mwc, \"-\") != true)\r\n{\r\n"                                   \
+    "mwt = mwt mwc\r\n}\r\n}\r\n}\r\n}\r\n"
+
+void InjectListFilter(char* data, size_t size) {
+    std::string text(data, size);
+    if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
+        return;
+    }
+    if (text.find("cm_mechlistbox") == std::string::npos) {
+        return;
+    }
+    // Navigation and drawing work in visible rows.
+    const int sizes = ReplaceAll(&text, "list_size", "vis_count");
+    // ...except the declaration (the first one), which the owners fill.
+    const size_t decl = text.find("vis_count");
+    if (decl == std::string::npos) {
+        return;
+    }
+    text.replace(decl, 9, "list_size");
+    const int status = ReplaceAll(&text, "mech_status [i]", "mech_status [vis[i]]");
+    const int sel = ReplaceAll(&text, "nSelected == i", "nSelected == vis[i]");
+    const int items = ReplaceAll(&text, "list_item[i]", "list_item[vis[i]]");
+    const int pick = ReplaceAll(&text, "nSelected = lit", "nSelected = vis[lit]");
+    const std::string sync =
+        "if (filter_class < 0)\r\n{\r\nvis_count = list_size\r\n}\r\n";
+    bool ok = sizes >= 15 && status == 2 && sel == 1 && items == 2 && pick == 1;
+    ok = ok && InsertAfterLine(&text, "mech_status [max_items]",
+                               "int filter_class = -1\r\n"
+                               "int vis[max_items]\r\n"
+                               "int vis_count = 0\r\n"
+                               "int mwi\r\nint mwk\r\nint mwbest\r\nint mwlen\r\n"
+                               "string mwn\r\nstring mws\r\nstring mwt\r\nstring mwc\r\n"
+                               "int mwj\r\nint mwready = 0\r\nstring mwnames[128]\r\n"
+                               "int count_classes = 0\r\nint mwrc\r\n"
+                               "int row_class[max_items]\r\nint class_present[5]\r\n"
+                               "for (mwi = 0; mwi < max_items; mwi++)\r\n{\r\nvis[mwi] = mwi\r\n}\r\n");
+    ok = ok && InsertInsideBlock(&text, "GUI_INIT",
+                                 "if (filter_class < 0 && count_classes == 0)\r\n{\r\n"
+                                 "for (mwi = 0; mwi < list_size; mwi++)\r\n{\r\nvis[mwi] = mwi\r\n}\r\n"
+                                 "vis_count = list_size\r\n}\r\nelse\r\n{\r\n"
+                                 // The chassis names without spaces, '_' and '-' (the list
+                                 // writes "Black Heart" where the string is "Blackheart").
+                                 "if (mwready == 0)\r\n{\r\n"
+                                 "for (mwk = 0; mwk < 128; mwk++)\r\n{\r\n"
+                                 "mws = localize$(4500 + mwk)\r\n" MW_SQUEEZE("mws")
+                                 "mwnames[mwk] = mwt\r\n}\r\nmwready = 1\r\n}\r\n"
+                                 "for (mwk = 0; mwk < 5; mwk++)\r\n{\r\nclass_present[mwk] = 0\r\n}\r\n"
+                                 "vis_count = 0\r\n"
+                                 "for (mwi = 0; mwi < list_size; mwi++)\r\n{\r\n"
+                                 "mws = list_item[mwi]\r\n"
+                                 "mwc = left$(mws, 1)\r\n"
+                                 "mwrc = -1\r\n"
+                                 // Battle armour ('-') and infantry ('~'): class 4.
+                                 "if (equal$(mwc, \"-\"))\r\n{\r\nmwrc = 4\r\n}\r\n"
+                                 "if (equal$(mwc, \"~\"))\r\n{\r\nmwrc = 4\r\n}\r\n"
+                                 "if (mwrc < 0)\r\n{\r\n" MW_SQUEEZE("mws")
+                                 "mwn = mwt\r\n"
+                                 "mwbest = -1\r\nmwlen = 0\r\n"
+                                 "for (mwk = 0; mwk < 128; mwk++)\r\n{\r\n"
+                                 "if (length$(mwnames[mwk]) > mwlen)\r\n{\r\n"
+                                 "if (equal$(left$(mwn, length$(mwnames[mwk])), mwnames[mwk]))\r\n{\r\n"
+                                 "mwbest = mwk\r\nmwlen = length$(mwnames[mwk])\r\n}\r\n}\r\n}\r\n"
+                                 "if (mwbest >= 0)\r\n{\r\n"
+                                 "mwrc = @MechBay_main@mechinfo.mechWeightClassArray[mwbest]\r\n}\r\n}\r\n"
+                                 "row_class[mwi] = mwrc\r\n"
+                                 "if (mwrc >= 0)\r\n{\r\nclass_present[mwrc] = 1\r\n}\r\n"
+                                 // Unknown rows (e.g. a renamed 'Mech) stay in every class.
+                                 "if (filter_class < 0 || mwrc < 0 || mwrc == filter_class)\r\n"
+                                 "{\r\nvis[vis_count] = mwi\r\nvis_count++\r\n}\r\n"
+                                 "}\r\n}\r\n");
+    // Keep the scroll position inside the (possibly shorter) list.
+    ok = ok && InsertAfterLine(&text, "o_thumbregionbot.location = location.x+itemWidth,",
+                               "if (top_of_list > vis_count - num_displayed)\r\n{\r\n"
+                               "top_of_list = vis_count - num_displayed\r\n}\r\n"
+                               "if (top_of_list < 0)\r\n{\r\ntop_of_list = 0\r\n}\r\n");
+    for (const char* handler :
+         {"LBUTTON_UPDATE", "GUI_MAILBOX", "GUI_CHAR", "GUI_EXECUTE", "GUI_DRAW"}) {
+        ok = ok && InsertInsideBlock(&text, handler, sync);
+    }
+    // -77 from the owner: pick the first visible row, as a click would.
+    ok = ok && InsertInsideBlock(&text, "GUI_MAILBOX",
+                                 "if (sender == parent)\r\n{\r\n"
+                                 "if (getmessage() == -77)\r\n{\r\n"
+                                 "if (vis_count > 0)\r\n{\r\n"
+                                 "nSelected = vis[0]\r\nmail(nselected)\r\n}\r\n}\r\n}\r\n");
+    if (!ok) {
+        Log("script: cm_listboxes.script layout not recognised (%d/%d/%d/%d/%d); "
+            "MechLab class filter not added\n",
+            sizes, status, sel, items, pick);
+        return;
+    }
+    WriteBack(data, size, text, "cm_listboxes.script", "MechLab class filter (list)");
+}
+
+void InjectClassChoice(char* data, size_t size) {
+    std::string text(data, size);
+    if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
+        return;
+    }
+    if (text.find("o_availmechsdroplist") == std::string::npos) {
+        return;
+    }
+    // Type list two thirds of the row, Class the last third, each with its
+    // label above (the Type list was 269 + 16 wide, x 22..307).
+    // Classes: 0 All, 1 Light, 2 Medium, 3 Heavy, 4 Assault, 5 Elemental
+    // (battle armour and infantry, last as least likely). The droplist only
+    // offers the classes present in the list (in the campaign: the classes
+    // of the company's 'Mechs); mwfMap maps its rows to classes.
+    const std::string create =
+        "o_availmechsdroplist.itemWidth = 170\r\n"
+        "o_availmechsdroplist.count_classes = 1\r\n"
+        "o_availmechsdroplist.filter_class = -1\r\n"
+        "initialize(o_availmechsdroplist)\r\n"
+        "string mwfNames[6]\r\n"
+        "mwfNames[0] = \"All\"\r\nmwfNames[1] = \"Light\"\r\nmwfNames[2] = \"Medium\"\r\n"
+        "mwfNames[3] = \"Heavy\"\r\nmwfNames[4] = \"Assault\"\r\nmwfNames[5] = \"Elemental\"\r\n"
+        "int mwfMap[6]\r\n"
+        "int mwfN = 1\r\n"
+        "int mwfK\r\n"
+        "object o_mwfClass = s_droplistbox\r\n"
+        "if $$m_isCampaign$$ == 0\r\n{\r\no_mwfClass.location = 216, 135, 52\r\n}\r\n"
+        "if $$m_isCampaign$$ == 1\r\n{\r\no_mwfClass.location = 216, boxy + 55, 52\r\n}\r\n"
+        "o_mwfClass.label = \"Class:\"\r\n"
+        "o_mwfClass.offsetLabel = -1,-17\r\n"
+        "o_mwfClass.list_item[0] = mwfNames[0]\r\n"
+        "mwfMap[0] = 0\r\n"
+        "for (mwfK = 1; mwfK < 6; mwfK++)\r\n{\r\n"
+        "if (o_availmechsdroplist.class_present[mwfK - 1] == 1)\r\n{\r\n"
+        "o_mwfClass.list_item[mwfN] = mwfNames[mwfK]\r\nmwfMap[mwfN] = mwfK\r\nmwfN++\r\n}\r\n}\r\n"
+        "o_mwfClass.list_size = mwfN\r\n"
+        "o_mwfClass.itemWidth = 75\r\n"
+        "o_mwfClass.max_displayed = mwfN\r\n"
+        "o_mwfClass.boxFont3d = FPATH localize$(IDS_F_ML_LABEL)\r\n"
+        "o_mwfClass.itemHeight = 20\r\n"
+        "o_mwfClass.labelFont3d = FPATH localize$(IDS_F_ML_LABEL)\r\n"
+        "o_mwfClass.arrowHeight = 15\r\n"
+        "o_mwfClass.id = 230\r\n"
+        "int mwfCls = 0\r\n"
+        "callback($$Shell_CallbackHandler$$, 50, 206, mwfCls)\r\n"
+        "o_mwfClass.nSelected = 0\r\n"
+        "for (mwfK = 0; mwfK < mwfN; mwfK++)\r\n{\r\n"
+        "if (mwfMap[mwfK] == mwfCls)\r\n{\r\no_mwfClass.nSelected = mwfK\r\n}\r\n}\r\n"
+        "initialize(o_mwfClass)\r\n"
+        "o_availmechsdroplist.filter_class = mwfMap[o_mwfClass.nSelected] - 1\r\n"
+        "initialize(o_availmechsdroplist)\r\n";
+    const std::string handler =
+        "if sender == o_mwfClass\r\n{\r\n"
+        "callback($$Shell_CallbackHandler$$, 49, 206, mwfMap[o_mwfClass.nSelected])\r\n"
+        "o_availmechsdroplist.filter_class = mwfMap[o_mwfClass.nSelected] - 1\r\n"
+        "initialize(o_availmechsdroplist)\r\n"
+        // A class: load its first 'Mech, as picking it in the list would.
+        "if (o_mwfClass.nSelected > 0)\r\n{\r\nmail(-77, o_availmechsdroplist)\r\n}\r\n}\r\n";
+    bool ok = InsertAfterLine(&text, "initialize(o_camodroplist)", create);
+    const size_t camo = text.find("if sender == o_camodroplist");
+    ok = ok && camo != std::string::npos;
+    if (ok) {
+        text.insert(camo, handler);
+    }
+    // The tab's GUI_DEACTIVATE / GUI_ACTIVATE hide and show its controls.
+    ok = ok && InsertAfterLine(&text, "deactivate(o_availmechsdroplist)",
+                               "deactivate(o_mwfClass)\r\n");
+    const size_t act = text.find("\tactivate(o_availmechsdroplist)");
+    ok = ok && act != std::string::npos;
+    if (ok) {
+        const size_t eol = text.find('\n', act);
+        ok = eol != std::string::npos;
+        if (ok) {
+            text.insert(eol + 1, "activate(o_mwfClass)\r\n");
+        }
+    }
+    if (!ok) {
+        Log("script: chassis.script anchors not found; MechLab class filter not added\n");
+        return;
+    }
+    WriteBack(data, size, text, "chassis.script", "MechLab class filter (droplist)");
+}
+
+bool EndsWithI(const char* name, size_t len, const char* suffix) {
+    const size_t n = strlen(suffix);
+    return len >= n && _strnicmp(name + len - n, suffix, n) == 0;
+}
+
 void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive) {
     g_member_fetch(entry, edx, archive);
     __try {
@@ -432,7 +757,11 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         const bool video = len == sizeof(kTargetName) - 1 && _stricmp(name, kTargetName) == 0;
         const bool game = len == sizeof(kGameTarget) - 1 && _stricmp(name, kGameTarget) == 0;
         const bool join = len == sizeof(kJoinTarget) - 1 && _stricmp(name, kJoinTarget) == 0;
-        if (!video && !game && !join) {
+        const bool menu = GetConfig().menu_badge && len == sizeof(kMainMenuTarget) - 1 &&
+                          _stricmp(name, kMainMenuTarget) == 0;
+        const bool list = GetConfig().mechlab_filter && EndsWithI(name, len, kListBoxSuffix);
+        const bool chassis = GetConfig().mechlab_filter && EndsWithI(name, len, kChassisSuffix);
+        if (!video && !game && !join && !menu && !list && !chassis) {
             return;
         }
         const DWORD stored = *reinterpret_cast<DWORD*>(entry + kEntryStored);
@@ -447,8 +776,14 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
             InjectWindowedCheckbox(data, size);
         } else if (game) {
             InjectGameSwitches(data, size);
-        } else {
+        } else if (join) {
             InjectCamoChoice(data, size);
+        } else if (menu) {
+            InjectMainMenuBadge(data, size);
+        } else if (list) {
+            InjectListFilter(data, size);
+        } else {
+            InjectClassChoice(data, size);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("script: exception while inspecting archive entry\n");

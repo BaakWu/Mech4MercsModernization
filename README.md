@@ -27,6 +27,13 @@ hardware incompatibility but are often configuration or compatibility bugs.
 - correct mouse and display behavior with Windows display scaling above 100%
 - **sharper menus**: the 800x600 menus, MechLab and text are scaled up with a
   Lanczos filter, readable on 1080p and larger screens (issue #20)
+- a **weight-class filter in the MechLab**: a Class droplist (All / Light /
+  Medium / Heavy / Assault / Elemental) next to the chassis list, so you no
+  longer scroll through every chassis; choosing a class loads its first
+  'Mech, and in the campaign it only offers the classes you own (issue #28)
+- a **MODERNIZED / PATCH vX.Y.Z badge** in the empty plate at the bottom
+  left of the Main Menu, so you can see the patch is active and which
+  version (issue #24)
 - **sharper HUD text**: the 'Mech names in the lance roster are redrawn from
   the game's own MicroStyle font at your resolution, as sharp as the pilot
   names beside them, and the other small white HUD labels are smoothed

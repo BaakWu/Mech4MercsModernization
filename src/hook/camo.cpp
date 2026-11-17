@@ -17,6 +17,14 @@
 // can choose another default on Options > Multiplayer. Selecting any other
 // pilot first cancels it. Existing pilots are never changed.
 //
+// The game does not always keep that setting: with the campaign it can load
+// the template's '7' again, so 'Mechs the pilot got later - salvage after a
+// mission - came out pink (issue #29). So for a pilot with a recorded choice
+// ([camo] in mw4hook-pilots.ini: Join Regiment or Update), every new 'Mech
+// whose skin would be the template's '7' gets that choice instead. Any other
+// skin (e.g. one picked on Options > Multiplayer > Skin) is left alone, and
+// 'Mechs that already exist keep their paint.
+//
 // Game side (3.1c, located by unique patterns):
 //   0x00625E36 / 0x00625964  mov ecx,[eax+24h] / mov ecx,[edi+24h]
 //                            mov al,[ecx+30h]      <- detour (6 bytes:
@@ -76,6 +84,7 @@ namespace {
 volatile LONG g_pending = 0;  // the current pilot has a camouflage to apply
 volatile LONG g_chosen = 0;   // camouflage picked in the dialog (code), 0 = none
 volatile LONG g_code = 0;     // the code to give the current pilot
+volatile LONG g_saved = 0;    // the current pilot's recorded choice ([camo]), 0 = none
 char g_current[64] = {};      // the selected pilot (ShellSelectPilot)
 volatile LONG g_update_initial = 0;  // code the Update dialog's list opened with
 void* g_trampoline[2] = {};
@@ -126,7 +135,25 @@ void __cdecl OnSkinRead(unsigned char* holder) {
                 holder && !IsBadReadPtr(holder + 0x30, 1) ? holder[0x30] : '?');
         }
     }
-    if (!g_pending || !holder) {
+    if (!holder) {
+        return;
+    }
+    if (!g_pending) {
+        // Issue #29: the template's pink came back (e.g. with the campaign);
+        // give this new 'Mech the pilot's recorded choice.
+        const char saved = static_cast<char>(g_saved);
+        __try {
+            if (saved && saved != '7' && holder[0x30] == '7') {
+                holder[0x30] = static_cast<unsigned char>(saved);
+                static int logged = 0;
+                if (logged < 20) {
+                    ++logged;
+                    Log("camo: %s: new 'Mech gets '%c' instead of the template's '7'\n",
+                        g_current, saved);
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
         return;
     }
     InterlockedExchange(&g_pending, 0);
@@ -235,6 +262,7 @@ bool TakeNewPilotControls(const char* name) {
 // 'Mechs are created until another pilot is selected.
 void SetCurrentPilot(const char* name) {
     strncpy_s(g_current, name, _TRUNCATE);
+    InterlockedExchange(&g_saved, name[0] ? ReadRecord(L"camo", name) : 0);
     const int code = name[0] ? ReadRecord(L"camo_pending", name) : 0;
     InterlockedExchange(&g_code, code);
     InterlockedExchange(&g_pending, code ? 1 : 0);

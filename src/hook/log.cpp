@@ -68,6 +68,8 @@ void LoadConfig() {
     g_config.aim_gyro = GetPrivateProfileIntW(L"aim", L"gyro", 0, path) != 0;
     g_config.full_company = GetPrivateProfileIntW(L"campaign", L"full_company", 0, path) != 0;
     g_config.hud_sharp = GetPrivateProfileIntW(L"hud", L"sharp", 1, path) != 0;
+    g_config.mechlab_filter = GetPrivateProfileIntW(L"mechlab", L"class_filter", 1, path) != 0;
+    g_config.menu_badge = GetPrivateProfileIntW(L"frontend", L"badge", 1, path) != 0;
     g_config.hud_names = GetPrivateProfileIntW(L"hud", L"names", 1, path) != 0;
     g_config.sound_background = GetPrivateProfileIntW(L"sound", L"background", 1, path) != 0;
     // "None" (or "_") = no camouflage; otherwise the camouflage's code, the

@@ -23,6 +23,8 @@ constexpr int kMwoGyroAim = 203;
 constexpr int kMwoNewPilotCamo = 204;
 // Option id for Roster > Update > Camouflage (the selected pilot's default).
 constexpr int kMwoPilotCamo = 205;
+// MechLab weight-class filter (0 all, 1 light .. 4 assault, 5 elemental), per session.
+constexpr int kMwoMechClass = 206;
 
 // Logging
 void LogInit(HINSTANCE self);
@@ -76,6 +78,8 @@ struct Config {
     bool aim_gyro = false;           // [aim] gyro: initial Gyro Aim setting (Options > Game)
     bool full_company = false;  // [campaign] full_company: 7 lancemates where 1-6 (#21)
     bool hud_sharp = true;          // [hud] sharp: 4x HUD images (#27)
+    bool mechlab_filter = true;     // [mechlab] class_filter: weight-class filter (#28)
+    bool menu_badge = true;         // [frontend] badge: Main Menu patch badge (#24)
     bool hud_names = true;          // [hud] names: roster names from the MicroStyle font
     bool sound_background = true;  // [sound] background: keep playing when unfocused (#26)
     // [mechlab] default_camo: a new pilot's default camouflage code (the first
