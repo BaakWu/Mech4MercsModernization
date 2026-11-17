@@ -74,6 +74,7 @@ struct Config {
     float aim_sensitivity = 1.0f;    // [aim] sensitivity: multiplier on the game's slider
     bool aim_marker = true;          // [aim] marker: show where the torso is turning to
     bool aim_gyro = false;           // [aim] gyro: initial Gyro Aim setting (Options > Game)
+    bool sound_background = true;  // [sound] background: keep playing when unfocused (#26)
     // [mechlab] default_camo: a new pilot's default camouflage code (the first
     // character of MekTek's camouflage name; '_' = None; empty = template's).
     char default_camo = '_';
@@ -92,6 +93,9 @@ void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWOR
 bool InstallAimHooks();
 void AimAfterDrive(char* controller, double now);
 bool GyroAimEnabled();
+
+// Audio keeps playing while the window is unfocused (sound.cpp, issue #26).
+bool InstallSoundHooks();
 
 // A new pilot's default camouflage (camo.cpp, issue #19).
 // Per-pilot records in mw4hook-pilots.ini (survive restarts): a new pilot's

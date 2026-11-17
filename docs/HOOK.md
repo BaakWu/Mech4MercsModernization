@@ -125,6 +125,26 @@ window's own DC instead of the primary surface: the DirectDraw primary
 surface only covers the main monitor, so a window dragged to another monitor
 used to freeze (the game kept running behind a stale picture).
 
+### Audio while the window is in the background (`[sound] background=1`; issue #26)
+
+DirectSound mutes every secondary buffer created without
+`DSBCAPS_GLOBALFOCUS` while the window that set its cooperative level is not
+in the foreground. In windowed or borderless play the game went silent as
+soon as another window was clicked.
+
+GameOS loads `dsound.dll` itself (`LoadLibrary` + `GetProcAddress
+"DirectSoundCreate"`, 3.1c `0x0073638B`). So the hook:
+
+1. loads the system `dsound.dll` first;
+2. detours its `DirectSoundCreate` export (5 bytes; the hot-patch prologue
+   `mov edi,edi; push ebp; mov ebp,esp` is checked before patching);
+3. on the returned `IDirectSound`, patches `CreateSoundBuffer` (vtable slot
+   3) to add `DSBCAPS_GLOBALFOCUS` to every secondary buffer. Duplicated
+   buffers inherit it.
+
+Input still pauses while the window is inactive (GameOS skips its input
+update then). `[sound] background=0` restores the stock behaviour.
+
 ### Direct3D: per-frame display rebuild, depth buffer
 
 Found 2026-11-16 by A/B with all display features disabled (the stock game
@@ -369,6 +389,11 @@ measured from frames a known twist apart, because GameOS transforms vertices
 itself and Direct3D's projection is unused: `x = w/2 × 2.02 × tan(yaw)`,
 `y = h/2 × 2.32 × tan(pitch)` (about 53° horizontal field of view; the zoom
 view is a separate inset).
+
+While the torso is still turning toward the aim point, a **green line** runs
+from the reticle (the view centre) to the circle's edge (issue #23). It is
+drawn with one GDI `LineTo` on the frame's DC, a dark pen first and the green
+pen on top, and is hidden once the circle is within 1.5 radii of the reticle.
 
 Verified in Tharkad - Checkmate (fresh extraction, `track_pointer=1`):
 

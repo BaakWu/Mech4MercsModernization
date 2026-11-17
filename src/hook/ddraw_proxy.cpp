@@ -255,7 +255,8 @@ constexpr float kViewScaleY = 2.32f;
 
 // Draws a small circle (the aim point) on the finished frame before it is
 // presented: a green ring with a 1-pixel dark outline for contrast, scaled
-// with the frame height. Shown all the time in aim mode.
+// with the frame height, shown all the time in aim mode; and a green line
+// from the reticle to the ring while the torso is still turning toward it.
 void DrawAimMarker(IDirectDrawSurface7* frame, const RECT* frame_rect,
                    HRESULT(WINAPI* blt)(IDirectDrawSurface7*, LPRECT, IDirectDrawSurface7*,
                                         LPRECT, DWORD, LPDDBLTFX)) {
@@ -288,8 +289,10 @@ void DrawAimMarker(IDirectDrawSurface7* frame, const RECT* frame_rect,
     const int cy = area.top + h / 2 + static_cast<int>(h * 0.5f * m11 * std::tan(pitch));
 
     const int unit = h >= 900 ? 2 : 1;
-    const int radius = 8 * unit;
-    const int thick = unit + 1;
+    const int radius = unit == 2 ? 5 : 3;  // a third of the original 8 * unit
+    // Line and ring strokes: half the original unit + 1, with a 1-pixel dark
+    // outline around each.
+    const int thick = (unit + 1) / 2 > 0 ? (unit + 1) / 2 : 1;
     auto color = [&](DWORD rgb) -> DWORD {
         const DDPIXELFORMAT& pf = desc.ddpfPixelFormat;
         if (pf.dwRGBBitCount == 16) {
@@ -299,6 +302,34 @@ void DrawAimMarker(IDirectDrawSurface7* frame, const RECT* frame_rect,
         }
         return rgb;
     };
+    // A line from the torso reticle (view centre) to the circle's edge, while
+    // the aim point is away from the reticle (issue #23): one GDI line, a dark
+    // outline pen first and the green pen on top.
+    const int rx = area.left + w / 2;
+    const int ry = area.top + h / 2;
+    const float dx = static_cast<float>(cx - rx);
+    const float dy = static_cast<float>(cy - ry);
+    const float dist = std::sqrt(dx * dx + dy * dy);
+    if (dist > radius * 1.5f) {
+        const int ex = cx - static_cast<int>(std::lround(dx / dist * radius));
+        const int ey = cy - static_cast<int>(std::lround(dy / dist * radius));
+        HDC dc = nullptr;
+        if (SUCCEEDED(frame->GetDC(&dc)) && dc) {
+            const int save = SaveDC(dc);
+            IntersectClipRect(dc, area.left, area.top, area.right, area.bottom);
+            for (int pass = 0; pass < 2; ++pass) {
+                HPEN pen = CreatePen(PS_SOLID, pass == 0 ? thick + 2 : thick,
+                                     pass == 0 ? RGB(0x10, 0x10, 0x10) : RGB(0x40, 0xFF, 0x40));
+                HGDIOBJ old = SelectObject(dc, pen);
+                MoveToEx(dc, rx, ry, nullptr);
+                LineTo(dc, ex, ey);
+                SelectObject(dc, old);
+                DeleteObject(pen);
+            }
+            RestoreDC(dc, save);
+            frame->ReleaseDC(dc);
+        }
+    }
     // A ring: small squares along the circle, enough that they touch.
     constexpr int kDots = 48;
     RECT dots[kDots];

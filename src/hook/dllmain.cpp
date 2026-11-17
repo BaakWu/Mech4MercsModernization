@@ -94,6 +94,10 @@ DWORD WINAPI HookThread(LPVOID) {
     bool controls_done = !config.hooks_enabled;
     bool aim_done = !config.hooks_enabled;
     bool camo_done = !config.hooks_enabled;
+    // Before GameOS loads dsound.dll and creates its buffers.
+    if (config.hooks_enabled) {
+        mw4hook::InstallSoundHooks();
+    }
     // The packed image is unpacked by the time imports are resolved, but
     // retry briefly in case a pattern is not readable yet.
     for (int i = 0; i < 300; ++i) {
