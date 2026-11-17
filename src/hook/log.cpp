@@ -66,6 +66,16 @@ void LoadConfig() {
     g_config.aim_sensitivity = (sensitivity > 0.05f && sensitivity < 20.0f) ? sensitivity : 1.0f;
     g_config.aim_marker = GetPrivateProfileIntW(L"aim", L"marker", 1, path) != 0;
     g_config.aim_gyro = GetPrivateProfileIntW(L"aim", L"gyro", 0, path) != 0;
+    // "None" (or "_") = no camouflage; otherwise the camouflage's code, the
+    // first character of its MechLab name (e.g. "a" for "a-Snow - SnowBall").
+    wchar_t camo[64] = {};
+    GetPrivateProfileStringW(L"mechlab", L"default_camo", L"None", camo, 64, path);
+    if (_wcsicmp(camo, L"None") == 0) {
+        g_config.default_camo = '_';
+    } else {
+        g_config.default_camo =
+            (camo[0] > 0x20 && camo[0] < 0x7F) ? static_cast<char>(camo[0]) : '\0';
+    }
 }
 
 }  // namespace

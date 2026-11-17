@@ -70,6 +70,9 @@ struct Config {
     float aim_sensitivity = 1.0f;    // [aim] sensitivity: multiplier on the game's slider
     bool aim_marker = true;          // [aim] marker: show where the torso is turning to
     bool aim_gyro = false;           // [aim] gyro: initial Gyro Aim setting (Options > Game)
+    // [mechlab] default_camo: a new pilot's default camouflage code (the first
+    // character of MekTek's camouflage name; '_' = None; empty = template's).
+    char default_camo = '_';
 };
 
 // MW5-style keyboard driving (controls.cpp).
@@ -85,6 +88,11 @@ void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWOR
 bool InstallAimHooks();
 void AimAfterDrive(char* controller, double now);
 bool GyroAimEnabled();
+
+// A new pilot's default camouflage (camo.cpp, issue #19).
+bool InstallCamoHooks();
+void SetNewPilotCamo();
+void CancelNewPilotCamo();
 void SetGyroAim(bool enabled);  // Options > Game; saved to mw4hook.ini
 
 const Config& GetConfig();

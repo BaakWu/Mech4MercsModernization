@@ -30,6 +30,7 @@ $sources = @(
     'automation.cpp',
     'controls.cpp',
     'aim.cpp',
+    'camo.cpp',
     'cursor.cpp',
     'detour.cpp',
     'dinput_proxy.cpp',

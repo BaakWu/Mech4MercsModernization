@@ -369,6 +369,36 @@ Verified in Tharkad - Checkmate (fresh extraction, `track_pointer=1`):
 | pitch, 2000 counts | stops at −0.5236 (the limit) |
 | 20° flick | compass 4° → 23°; marker shown while turning |
 
+### Default camouflage for new pilots (`[mechlab] default_camo`; issue #19)
+
+Every 'Mech a pilot gets takes that pilot's own skin setting. That covers
+the campaign's starting 'Mechs, purchases and salvage. The setting is
+MekTek's per-pilot default, Options > Multiplayer > Skin.
+
+- **The bug:** a pilot created in the Roster starts from MekTek's template
+  profile with skin '7', "7-Ops - Pink". So every 'Mech of a new unit came out
+  pink, although the Multiplayer screen's own default is "None".
+- **Skin codes:** a code is the first character of MekTek's camouflage name
+  in MechLab (`chassis.script` hard-codes the names): '7' is Pink and '_' is
+  None. The 'Mech keeps it as one byte at `+0x278`.
+- **Why a detour:** the pilot's skin (`[[player]+0x44 ^ K]+0x24 → +0x30`)
+  is loaded only with its campaign, in the same step that creates the
+  starting 'Mechs, so it cannot be set earlier. Setting it at the pilot's
+  first selection hit an unloaded object, and setting it later came after the
+  'Mechs already existed.
+- **The detours:** the two places that copy the skin into a new 'Mech
+  (`0x00625E36` / `0x00625964`: `mov al,[ecx+30h]; lea ecx,[esi+2Ch]`) are
+  detoured with register-preserving stubs. For a pilot just created in the
+  Roster (marked on its first selection, together with its controls), the
+  first time one of its 'Mechs is created, the pilot's skin is set to
+  `default_camo` (default None) right before it is read.
+- **Scope:** from then on that pilot's 'Mechs and its saved setting use it,
+  and the player can still change it on Options > Multiplayer. Selecting a
+  different pilot first cancels it. Existing pilots are never touched.
+- **Verified:** a new pilot's campaign MechLab showed its starting Flea as
+  **None** with stock paint (the log showed the skin switched from '7' to
+  '_'). Without the fix the same Flea showed "7-Ops - Pink".
+
 ### Selected resolution
 
 The Resolution dropdown is filled by `ShellGetSupportedResolutions` from a
@@ -424,6 +454,7 @@ game's handler sees it.
 | `IDirectDrawSurface7::Blt` | ddraw.dll vtable slot 5 | present scaling; window DC off the main monitor; aim marker |
 | keyboard drive step | `0x0054F2A0` | 5-byte detour (MW5 throttle, Throttle Decay, aim point) |
 | mouse step | `0x0054EDA0` | 5-byte detour (aim point; pass-through when off) |
+| new-'Mech skin copy | `0x00625E39`, `0x00625967` | 6-byte detours (a new pilot's default camouflage) |
 
 The last three are COM vtable hooks inside the `ddraw.dll` proxy; nothing in
 `MW4Mercs.exe` is patched for them.
@@ -453,6 +484,8 @@ track_pointer=0 ; mouse moves an aim point; the torso turns to it and stops
 sensitivity=1.0 ; aim point speed (x the game's mouse sensitivity slider)
 marker=1        ; small circle at the aim point (always shown in aim mode)
 gyro=0          ; Gyro Aim (Options > Game; written there)
+[mechlab]
+default_camo=None ; a new pilot's camouflage (code char, or None; empty = Pink)
 [frontend]
 stretch=1     ; scale the picture into the window
 [log]

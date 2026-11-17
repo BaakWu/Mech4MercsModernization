@@ -173,6 +173,8 @@ void ApplyDisplay() {
 
 // A new pilot whose controls still need a real layout (see below).
 char g_new_pilot[64] = {};
+// A new pilot whose default camouflage is still pending (camo.cpp).
+char g_camo_pilot[64] = {};
 
 // A script string argument: a pointer to the characters, or to a pointer to
 // them. Returns nullptr if neither reads as a short printable string.
@@ -312,6 +314,14 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
         strncpy_s(g_new_pilot, name ? name : "", _TRUNCATE);
         Log("controls: new pilot '%s' created\n", g_new_pilot);
     }
+    if (cmd == kShellSelectPilot && g_camo_pilot[0]) {
+        // A pending default camouflage belongs to the new pilot only.
+        const char* name = ScriptString(args[1]);
+        if (!name || _stricmp(name, g_camo_pilot) != 0) {
+            CancelNewPilotCamo();
+            g_camo_pilot[0] = '\0';
+        }
+    }
     if (cmd == kShellSelectPilot && g_new_pilot[0]) {
         const char* name = ScriptString(args[1]);
         Log("controls: pilot '%s' selected\n", name ? name : "?");
@@ -323,6 +333,8 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
             int set_default[1] = {100};
             g_shell_callback(a1, a2, set_default);
             ApplyMw5Layout(g_shell_callback, a1, a2, false);
+            SetNewPilotCamo();  // the template's skin is Pink; see camo.cpp
+            strncpy_s(g_camo_pilot, name, _TRUNCATE);
             int save[1] = {kShellSaveOptions};
             Hook_ShellCallback(a1, a2, save);
             Log("controls: new pilot '%s': %s layout applied and saved\n", name,
