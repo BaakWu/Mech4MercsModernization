@@ -31,6 +31,13 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <vector>
+
+namespace mw4scale {
+// menu_scaler.cpp: separable Lanczos-3, 32-bit pixels.
+bool ScaleLanczos(const unsigned char* src, int src_pitch, int sw, int sh, unsigned char* dst,
+                  int dst_pitch, int dw, int dh);
+}  // namespace mw4scale
 #include <cstring>
 
 namespace {
@@ -38,6 +45,7 @@ namespace {
 HMODULE g_real_ddraw = nullptr;
 HANDLE g_log = INVALID_HANDLE_VALUE;
 bool g_stretch_enabled = true;
+bool g_filter_lanczos = true;  // [frontend] filter=lanczos (default) | halftone
 bool g_capture_enabled = false;
 bool g_clear_fix = true;
 bool g_zbuffer_fix = true;
@@ -82,6 +90,9 @@ void LoadConfig() {
     wcscat_s(path, MAX_PATH, L"mw4hook.ini");
     g_stretch_enabled =
         GetPrivateProfileIntW(L"frontend", L"stretch", 1, path) != 0;
+    wchar_t filter[32] = {};
+    GetPrivateProfileStringW(L"frontend", L"filter", L"lanczos", filter, 32, path);
+    g_filter_lanczos = _wcsicmp(filter, L"halftone") != 0;
     g_capture_enabled =
         GetPrivateProfileIntW(L"debug", L"automation", 0, path) != 0;
     g_clear_fix = GetPrivateProfileIntW(L"display", L"clear_fix", 1, path) != 0;
@@ -674,6 +685,123 @@ HWND PresentWindow(IDirectDrawSurface7* primary) {
     return hwnd;
 }
 
+// Lanczos menu present: copy the frame out of the render surface, scale it
+// (menu_scaler.cpp) into a DIB of the view size, draw that 1:1. Returns
+// false (caller falls back to StretchBlt) on any failure.
+struct LanczosTarget {
+    HDC dc = nullptr;
+    HBITMAP bitmap = nullptr;
+    HGDIOBJ old = nullptr;
+    unsigned char* bits = nullptr;
+    int width = 0;
+    int height = 0;
+} g_lanczos;
+std::vector<unsigned char> g_lanczos_src;
+
+bool PresentLanczos(HWND hwnd, IDirectDrawSurface7* src, const RECT& content, const RECT& view,
+                    const RECT (&bars)[2]) {
+    LARGE_INTEGER t0;
+    QueryPerformanceCounter(&t0);
+    const int sw = content.right - content.left;
+    const int sh = content.bottom - content.top;
+    const int dw = view.right - view.left;
+    const int dh = view.bottom - view.top;
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) {
+        return false;
+    }
+    // 1. Copy the frame out (32-bit only).
+    DDSURFACEDESC2 desc{};
+    desc.dwSize = sizeof(desc);
+    if (FAILED(src->Lock(nullptr, &desc, DDLOCK_READONLY | DDLOCK_WAIT | DDLOCK_SURFACEMEMORYPTR,
+                         nullptr))) {
+        return false;
+    }
+    bool ok = desc.ddpfPixelFormat.dwRGBBitCount == 32 && desc.lpSurface &&
+              content.right <= static_cast<LONG>(desc.dwWidth) &&
+              content.bottom <= static_cast<LONG>(desc.dwHeight);
+    if (ok) {
+        g_lanczos_src.resize(static_cast<size_t>(sw) * sh * 4);
+        const unsigned char* in = static_cast<const unsigned char*>(desc.lpSurface) +
+                                  content.top * desc.lPitch + content.left * 4;
+        for (int y = 0; y < sh; ++y) {
+            memcpy(&g_lanczos_src[static_cast<size_t>(y) * sw * 4], in + y * desc.lPitch,
+                   static_cast<size_t>(sw) * 4);
+        }
+    }
+    src->Unlock(nullptr);
+    if (!ok) {
+        return false;
+    }
+    // 2. A DIB of the view size.
+    if (g_lanczos.width != dw || g_lanczos.height != dh || !g_lanczos.dc) {
+        if (g_lanczos.dc) {
+            SelectObject(g_lanczos.dc, g_lanczos.old);
+            DeleteObject(g_lanczos.bitmap);
+            DeleteDC(g_lanczos.dc);
+            g_lanczos = LanczosTarget{};
+        }
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(info.bmiHeader);
+        info.bmiHeader.biWidth = dw;
+        info.bmiHeader.biHeight = -dh;  // top-down
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        HDC dc = CreateCompatibleDC(nullptr);
+        HBITMAP bitmap = dc ? CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0)
+                            : nullptr;
+        if (!bitmap || !bits) {
+            if (dc) {
+                DeleteDC(dc);
+            }
+            return false;
+        }
+        g_lanczos.dc = dc;
+        g_lanczos.bitmap = bitmap;
+        g_lanczos.old = SelectObject(dc, bitmap);
+        g_lanczos.bits = static_cast<unsigned char*>(bits);
+        g_lanczos.width = dw;
+        g_lanczos.height = dh;
+        Log("present scale: Lanczos %dx%d -> %dx%d\n", sw, sh, dw, dh);
+    }
+    // 3. Scale and draw.
+    if (!mw4scale::ScaleLanczos(g_lanczos_src.data(), sw * 4, sw, sh, g_lanczos.bits, dw * 4, dw,
+                                dh)) {
+        return false;
+    }
+    GdiFlush();
+    HDC dest_dc = GetDC(hwnd);
+    if (!dest_dc) {
+        return false;
+    }
+    for (const RECT& bar : bars) {
+        if (bar.right > bar.left && bar.bottom > bar.top) {
+            FillRect(dest_dc, &bar, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        }
+    }
+    const BOOL drawn = BitBlt(dest_dc, view.left, view.top, dw, dh, g_lanczos.dc, 0, 0, SRCCOPY);
+    ReleaseDC(hwnd, dest_dc);
+    if (g_capture_enabled) {
+        // Test aid: the cost of the whole menu present, every 5 s.
+        static double total = 0.0;
+        static int frames = 0;
+        static DWORD since = GetTickCount();
+        LARGE_INTEGER t1, freq;
+        QueryPerformanceCounter(&t1);
+        QueryPerformanceFrequency(&freq);
+        total += 1000.0 * (t1.QuadPart - t0.QuadPart) / freq.QuadPart;
+        ++frames;
+        if (GetTickCount() - since >= 5000) {
+            Log("present scale: Lanczos avg %.2f ms over %d frames\n", total / frames, frames);
+            total = 0.0;
+            frames = 0;
+            since = GetTickCount();
+        }
+    }
+    return drawn != FALSE;
+}
+
 // Windowed present. GameOS blits its render surface onto the primary surface
 // at the window's client origin, sized to its render size (800x600 for the
 // shell). The window client is the selected resolution, so when the two
@@ -770,6 +898,16 @@ HRESULT WINAPI Hook_BltInner(IDirectDrawSurface7* self, LPRECT dest_rect,
             PublishFrontendView(view, content_w, content_h);
         }
         return hr;
+    }
+
+    // Menus: the sharper Lanczos upscale, unless turned off; GDI's HALFTONE
+    // stretch below stays the fallback.
+    if (!same_size && g_filter_lanczos && PresentLanczos(hwnd, src, content, view, bars)) {
+        g_last_blt_stretched = true;
+        g_last_stretch_src = content;
+        g_last_stretch_view = view;
+        PublishFrontendView(view, content_w, content_h);
+        return DD_OK;
     }
 
     HDC src_dc = nullptr;

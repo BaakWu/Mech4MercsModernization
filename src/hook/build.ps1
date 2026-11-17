@@ -78,7 +78,7 @@ if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
 }
 
 # ddraw proxy (frontend stretch)
-$ddrawSources = @('ddraw_proxy.cpp') | ForEach-Object { Join-Path $src $_ }
+$ddrawSources = @('ddraw_proxy.cpp', 'menu_scaler.cpp') | ForEach-Object { Join-Path $src $_ }
 $ddrawDef = Join-Path $src 'ddraw.def'
 $ddrawObjDir = Join-Path $OutDir 'obj-ddraw'
 New-Item -ItemType Directory -Path $ddrawObjDir -Force | Out-Null
