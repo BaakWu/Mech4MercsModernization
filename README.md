@@ -27,6 +27,10 @@ hardware incompatibility but are often configuration or compatibility bugs.
 - correct mouse and display behavior with Windows display scaling above 100%
 - **sharper menus**: the 800x600 menus, MechLab and text are scaled up with a
   Lanczos filter, readable on 1080p and larger screens (issue #20)
+- **sharper HUD text**: the 'Mech names in the lance roster are redrawn from
+  the game's own MicroStyle font at your resolution, as sharp as the pilot
+  names beside them, and the other small white HUD labels are smoothed
+  (issue #27); the rest of the HUD is unchanged
 - **audio keeps playing** when you click outside the game window; input still
   pauses (issue #26)
 - fixes for four bugs in the stock game on current Windows: low mission frame

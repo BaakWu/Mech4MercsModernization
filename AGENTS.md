@@ -149,6 +149,13 @@ not add or replace:
 - widescreen/ultrawide/FOV/HUD layout changes
 - 64-channel audio changes
 
+Owner decision (2026-11-17, issue #27): the lance roster's 'Mech names,
+which were 6-texel images stretched blocky next to the TrueType pilot names,
+are redrawn from the game's own MicroStyle Bold Extended font (the typeface
+of those images, shipped as `.d3f` fonts) at the screen resolution. Same
+face, place and colour; only the sharpness changes. `[hud] names=0` turns it
+off.
+
 The windowed 1024x768 mode and working in-game resolution menu are
 compatibility requirements, not a visual overhaul. Keep the original 4:3
 presentation and original assets.

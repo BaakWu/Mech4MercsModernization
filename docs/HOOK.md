@@ -125,6 +125,64 @@ window's own DC instead of the primary surface: the DirectDraw primary
 surface only covers the main monitor, so a window dragged to another monitor
 used to freeze (the game kept running behind a stale picture).
 
+### Sharper HUD text (`[hud] sharp=1`, `[hud] names=1`; issue #27)
+
+The mission HUD's small texts are not drawn with a font. The 'Mech names in
+the lance roster (and the other white HUD labels and digits) are pre-drawn
+images in 256x256 texture atlases, `textures\hud\*.tga` (`hud5`, `hud5m`,
+`hud5v`, `hud6`, `hud6a`, `num`, ...). A name is 6 texels tall; at 1080p the
+HUD draws it about 1.8 times larger with point sampling, so it looked blocky
+next to the pilot names, which are TrueType text (Arial Rounded MT Bold)
+drawn at the screen resolution.
+
+When the game fetches one of those images from its archive, the member fetch
+hook (`0x00419150`) replaces it with a larger copy. The factor is the HUD
+scale (screen height / 600) rounded up, 2..4 (2 at 1080p, 3 at 1440p, 4 at
+2160p), so the atlas is drawn close to 1:1 on screen.
+
+- **'Mech names in the roster are redrawn from the game's font.** HUDComm
+  (the lance roster) registers one name image per chassis index *c*
+  (0..127), 7 texels tall, in `hud5m` (c 0..43) or `hud6a` (c 44..127)
+  (3.1c `0x006A5801`; the right edges are a float table whose address is
+  read from that code, the column starts are checked against its pushed
+  constants). In the upscaled atlas each of these rectangles is cleared and
+  the chassis's name - string 4500 + *c* of `ScriptStrings_MERCS.dll`, in
+  capitals ("Behemoth_II" -> "BEHEMOTH II") - is drawn from MicroStyle Bold
+  Extended, the typeface of the original images. The game ships it as GameOS
+  `.d3f` bitmap fonts for the menus (`microstyle8/10/12/14boldext.d3f`); the
+  hook keeps a copy of each as the shell loads it and picks the size whose
+  capitals match the target height (6 texels x factor; the 14 px font, 11 px
+  capitals, at 1080p). The `.d3f` format: `D3F4`, face name, cell height at
+  `0x50` (x256), then 256-entry byte tables at `0x155` (x, y, width, before,
+  after) and a 256x256 8-bit glyph sheet at 1625. Glyphs are resampled with
+  4x4 supersampling; the name fills the original's span (letter spacing
+  spread, or squeezed when longer). The roster names are now as sharp as the
+  pilot names, in the same face and place.
+- **Other text** is a white mask (pure white texels with an anti-aliased
+  alpha on a transparent background; the game tints it at draw time). Where
+  a texel's whole 7x7 neighbourhood is white or fully transparent, the alpha
+  is upscaled with Lanczos-3 and its edges are firmed (contrast 3 around 35%
+  coverage, so thin diagonals keep their weight).
+- **Everything else** (translucent panels, coloured lines, the damage-label
+  boxes, the weapon-group digits) is copied texel for texel, so it looks
+  exactly as before and nothing bleeds between tightly packed drawings. An
+  earlier version that filtered every texel doubled the radar rings and
+  pulled the white dividers into the label boxes.
+
+Direct3D texture coordinates are 0..1, so the larger atlas draws in the same
+places. The new image is allocated with the game's own allocator (the call
+at member fetch `+0x2C`, with the archive's heap) and the decompressed
+original freed with its free (`+0x8D`), so the game releases it as usual.
+Only compressed members (which own their buffer) are replaced; only
+uncompressed 32-bit TGAs up to 512x512.
+
+Verified (2026-11-17) at 1920x1080 in Eaton - Merc Alley and Tharkad -
+Checkmate (seven lancemates): 128 names loaded, 44 redrawn in `hud5m` and 84
+in `hud6a`; the roster's 'Mech names (BEHEMOTH II, BLACK HAWK, BLOOD ASP, ...)
+are crisp, right-aligned in their places; radar, damage labels, weapon groups
+and the rest of the HUD are unchanged. `[hud] names=0` keeps the upscaled
+original name images; `[hud] sharp=0` restores the stock images.
+
 ### Audio while the window is in the background (`[sound] background=1`; issue #26)
 
 DirectSound mutes every secondary buffer created without
@@ -580,7 +638,7 @@ game's handler sees it.
 |---|---|---|
 | `gos_SetScreenMode` | `0x0070F8B0` | 9-byte detour |
 | `Shell_CallbackHandler` | `0x00506770` | 6-byte detour |
-| `#VBD` member fetch | `0x00419150` | 7-byte detour |
+| `#VBD` member fetch | `0x00419150` | 7-byte detour (shell scripts; sharper HUD images and roster names) |
 | fullscreen 16-bit (renderer path) | `0x0070FECC` | `0x10` -> `0x20` |
 | fullscreen 16-bit (last resort) | `0x007100F0`, `0x007100FA` | `0x10` -> `0x20` |
 | `IDirect3DDevice7::Clear` | ddraw.dll vtable slot 10 | retry failed Clear without stencil / depth |
@@ -624,6 +682,9 @@ gyro=0          ; Gyro Aim (Options > Game; written there)
 default_camo=None ; a new pilot's camouflage (code char, or None; empty = Pink)
 [campaign]
 full_company=0 ; 7 lancemates in campaign missions that allow 1-6 (opt-in)
+[hud]
+sharp=1       ; sharper HUD text images (2-4x, by resolution)
+names=1       ; roster 'Mech names redrawn from the MicroStyle font
 [sound]
 background=1  ; keep the audio playing when the window is not focused
 [frontend]

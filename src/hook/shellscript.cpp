@@ -426,6 +426,7 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         if (GetConfig().debug_automation) {
             DumpScript(entry);
         }
+        SharpenHudImage(entry, archive);
         const char* name = reinterpret_cast<char*>(entry + kEntryName);
         const size_t len = entry[kEntryNameLen];
         const bool video = len == sizeof(kTargetName) - 1 && _stricmp(name, kTargetName) == 0;
@@ -468,6 +469,15 @@ bool InstallShellScriptHook() {
         return false;
     }
     g_installed = true;
+    // The fetch allocates a decompressed member with the game's allocator
+    // (call at +0x2C: alloc(size, archive heap)) and frees the packed copy
+    // (call at +0x8D); the HUD image sharpener (hudtex.cpp) uses the same two.
+    if (fetch[0x2C] == 0xE8 && fetch[0x8D] == 0xE8) {
+        SetGameAllocator(fetch + 0x2C + 5 + *reinterpret_cast<int*>(fetch + 0x2D),
+                         fetch + 0x8D + 5 + *reinterpret_cast<int*>(fetch + 0x8E));
+    } else {
+        Log("script: game allocator calls not found; HUD sharpening off\n");
+    }
     InstallDetour(fetch, 7, reinterpret_cast<void*>(&Hook_MemberFetch),
                   reinterpret_cast<void**>(&g_member_fetch));
     Log("script: archive member hook %s\n", g_member_fetch ? "ok" : "failed");

@@ -75,6 +75,8 @@ struct Config {
     bool aim_marker = true;          // [aim] marker: show where the torso is turning to
     bool aim_gyro = false;           // [aim] gyro: initial Gyro Aim setting (Options > Game)
     bool full_company = false;  // [campaign] full_company: 7 lancemates where 1-6 (#21)
+    bool hud_sharp = true;          // [hud] sharp: 4x HUD images (#27)
+    bool hud_names = true;          // [hud] names: roster names from the MicroStyle font
     bool sound_background = true;  // [sound] background: keep playing when unfocused (#26)
     // [mechlab] default_camo: a new pilot's default camouflage code (the first
     // character of MekTek's camouflage name; '_' = None; empty = template's).
@@ -97,6 +99,11 @@ bool GyroAimEnabled();
 
 // Full company in campaign missions (campaign.cpp, issue #21).
 bool InstallCampaignHooks();
+
+// Sharper HUD images (hudtex.cpp, issue #27): the archive member hook passes
+// each fetched entry; textures\hud\*.tga are replaced by a 4x copy.
+void SetGameAllocator(void* alloc, void* free_fn);
+void SharpenHudImage(unsigned char* entry, void* archive);
 
 // Audio keeps playing while the window is unfocused (sound.cpp, issue #26).
 bool InstallSoundHooks();
