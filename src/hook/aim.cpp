@@ -63,6 +63,8 @@ constexpr size_t kCentering = 0x6D0;
 constexpr size_t kMech = 0x38C;
 constexpr size_t kMechParts = 0x440;
 constexpr size_t kTwistLimit = 0x76C;
+constexpr size_t kHeadingCos = 0xF4;
+constexpr size_t kHeadingSin = 0xFC;
 constexpr size_t kPitchLimit = 0x7C8;
 constexpr size_t kTorsoYaw = 0x19C;
 constexpr size_t kTorsoPitch = 0x1A0;
@@ -77,6 +79,7 @@ constexpr float kDefaultRate = 0.9f;  // rad/s at full command, until measured
 
 using MouseStep_t = void(__thiscall*)(void*, double);
 MouseStep_t g_mouse_step = nullptr;
+volatile LONG g_gyro = 0;  // Options > Game > Gyro Aim
 const unsigned char* g_mousey = nullptr;
 bool g_installed = false;
 
@@ -96,6 +99,8 @@ struct State {
     double last_now = 0.0;
     Axis yaw;
     Axis pitch;
+    float heading = 0.0f;  // legs' heading last frame
+    bool have_heading = false;
     // For the marker (read by the ddraw proxy through Mw4AimMarker).
     volatile float marker_yaw = 0.0f;    // aim point minus torso, rad
     volatile float marker_pitch = 0.0f;
@@ -169,6 +174,33 @@ float Steer(Axis& axis, float angle, float applied, double dt) {
     return Clamp((axis.target - angle) / (axis.rate * tau), -1.0f, 1.0f);
 }
 
+// The legs' heading (rad, + = left, like the torso yaw) from the mech's
+// rotation matrix: mech+0xF4 = cos, mech+0xFC = sin (mirrored at +0x11C /
+// +0x114). Found by diffing the mech before and after a held turn.
+bool Heading(char* mech, float* out) {
+    __try {
+        const float c = At<float>(mech, kHeadingCos);
+        const float s = At<float>(mech, kHeadingSin);
+        if (!(c == c) || !(s == s) || std::fabs(c * c + s * s - 1.0f) > 0.05f) {
+            return false;
+        }
+        *out = std::atan2(s, c);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+float WrapAngle(float a) {
+    while (a > 3.14159265f) {
+        a -= 6.2831853f;
+    }
+    while (a < -3.14159265f) {
+        a += 6.2831853f;
+    }
+    return a;
+}
+
 float Limit(char* mech, size_t offset, float fallback) {
     float v = fallback;
     __try {
@@ -203,6 +235,22 @@ void AimAfterDrive(char* self, double now) {
         g.torso = torso;
         g.yaw = Axis{yaw, kDefaultRate, yaw, 0.0f};
         g.pitch = Axis{pitch, kDefaultRate, pitch, 0.0f};
+        g.have_heading = false;
+    }
+    // How far the legs turned since the last frame (rad, + = left).
+    float heading = 0.0f;
+    float legs_turn = 0.0f;
+    if (Heading(mech, &heading)) {
+        if (g.have_heading) {
+            legs_turn = WrapAngle(heading - g.heading);
+            if (std::fabs(legs_turn) > 0.5f) {
+                legs_turn = 0.0f;  // a jump (respawn, teleport), not a turn
+            }
+        }
+        g.heading = heading;
+        g.have_heading = true;
+    } else {
+        g.have_heading = false;
     }
 
     const float sensitivity =
@@ -240,26 +288,49 @@ void AimAfterDrive(char* self, double now) {
         g.pitch.target = Clamp(g.pitch.target - dy * sensitivity, -pitch_limit, pitch_limit);
     }
 
-    // Auto-centering (options.ini autotorsocenter) turns the legs toward the
-    // torso and, in the same step, counter-rotates the torso (its command is
-    // what the drive step left in the yaw command; the mouse contributes
-    // nothing there in aim mode). Keep that counter-rotation and move the aim
-    // point with it, so the aim stays put in the world while the legs catch
-    // up. Without it the legs would chase a torso that turns along with them.
-    const float centering = At<float>(self, kYawCmd);
-    if (dt > 0.0 && centering != 0.0f) {
-        g.yaw.target = Clamp(g.yaw.target + centering * g.yaw.rate * static_cast<float>(dt),
-                             -twist_limit, twist_limit);
+    float feed_forward = 0.0f;
+    float steer_yaw = yaw;
+    const bool gyro = g_gyro != 0;
+    if (gyro) {
+        // Gyro Aim (issue #17): whatever turns the legs (A/D, auto-centering),
+        // the torso keeps its direction in the world, like a gyro-stabilized
+        // turret: the legs' turn is taken off the torso's twist angle
+        // directly, so it holds however fast the legs turn (a counter-rotation
+        // command is capped at the mech's twist rate and fell behind on a
+        // held turn). The aim point moves with it. At the twist limit both
+        // stop and the torso is carried with the legs. Mouse aiming still
+        // twists at the mech's own rate.
+        g.yaw.target = Clamp(g.yaw.target - legs_turn, -twist_limit, twist_limit);
+        if (legs_turn != 0.0f) {
+            steer_yaw = Clamp(yaw - legs_turn, -twist_limit, twist_limit);
+            At<float>(torso, kTorsoYaw) = steer_yaw;
+            // Keep the twist-rate learning to the torso's own motion.
+            g.yaw.last_angle += steer_yaw - yaw;
+        }
+    } else {
+        // Auto-centering (options.ini autotorsocenter) turns the legs toward
+        // the torso and, in the same step, counter-rotates the torso (its
+        // command is what the drive step left in the yaw command; the mouse
+        // contributes nothing there in aim mode). Keep that counter-rotation
+        // and move the aim point with it, so the aim stays put in the world
+        // while the legs catch up. Without it the legs would chase a torso
+        // that turns along with them.
+        feed_forward = At<float>(self, kYawCmd);
+        if (dt > 0.0 && feed_forward != 0.0f) {
+            g.yaw.target =
+                Clamp(g.yaw.target + feed_forward * g.yaw.rate * static_cast<float>(dt),
+                      -twist_limit, twist_limit);
+        }
     }
-    const float yaw_cmd =
-        Clamp(centering + Steer(g.yaw, yaw, At<float>(torso, kTorsoYawRate), dt), -1.0f, 1.0f);
+    const float yaw_cmd = Clamp(
+        feed_forward + Steer(g.yaw, steer_yaw, At<float>(torso, kTorsoYawRate), dt), -1.0f, 1.0f);
     At<float>(self, kYawCmd) = yaw_cmd;
     float pitch_cmd = At<float>(self, kPitchCmd);
     if (pitch_by_mouse) {
         pitch_cmd = Steer(g.pitch, pitch, At<float>(torso, kTorsoPitchRate), dt);
         At<float>(self, kPitchCmd) = pitch_cmd;
     }
-    g.marker_yaw = g.yaw.target - yaw;
+    g.marker_yaw = g.yaw.target - steer_yaw;
     g.marker_pitch = pitch_by_mouse ? g.pitch.target - pitch : 0.0f;
     g.marker_tick = GetTickCount();
 
@@ -268,9 +339,10 @@ void AimAfterDrive(char* self, double now) {
         if (dx != 0.0f || dy != 0.0f || now - logged >= 0.05) {
             logged = now;
             Log("aim: t=%.3f d=%+.0f,%+.0f target=%+.4f,%+.4f torso=%+.4f,%+.4f cmd=%+.3f,%+.3f "
-                "rate=%.2f,%.2f limit=%.4f,%.4f\n",
+                "rate=%.2f,%.2f limit=%.4f,%.4f heading=%+.4f world=%+.4f gyro=%d\n",
                 now, dx, dy, g.yaw.target, g.pitch.target, yaw, pitch, yaw_cmd, pitch_cmd,
-                g.yaw.rate, g.pitch.rate, twist_limit, pitch_limit);
+                g.yaw.rate, g.pitch.rate, twist_limit, pitch_limit, g.heading,
+                WrapAngle(g.heading + steer_yaw), gyro ? 1 : 0);
         }
     }
 }
@@ -298,10 +370,25 @@ extern "C" int WINAPI Mw4AimMarker(float* yaw_offset, float* pitch_offset) {
     return 1;
 }
 
+bool GyroAimEnabled() { return g_gyro != 0; }
+
+void SetGyroAim(bool enabled) {
+    InterlockedExchange(&g_gyro, enabled ? 1 : 0);
+    wchar_t path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    wchar_t* slash = len ? wcsrchr(path, L'\\') : nullptr;
+    if (slash) {
+        wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"mw4hook.ini");
+        WritePrivateProfileStringW(L"aim", L"gyro", enabled ? L"1" : L"0", path);
+    }
+    Log("aim: gyro aim %s\n", enabled ? "on" : "off");
+}
+
 bool InstallAimHooks() {
     if (g_installed) {
         return true;
     }
+    InterlockedExchange(&g_gyro, GetConfig().aim_gyro ? 1 : 0);
     unsigned char* step =
         FindUnique("mouse_step", "83 EC 18 53 55 56 8B F1 33 DB 57 38 9E 0C 09 00 00 0F 85");
     if (!step) {
@@ -315,9 +402,9 @@ bool InstallAimHooks() {
     // sub esp,18h; push ebx; push ebp = 5 bytes, position independent.
     InstallDetour(step, 5, reinterpret_cast<void*>(&Hook_MouseStep),
                   reinterpret_cast<void**>(&g_mouse_step));
-    Log("aim: mouse step hook %s (track_pointer %d, sensitivity %.2f, mousey flag %s)\n",
+    Log("aim: mouse step hook %s (track_pointer %d, sensitivity %.2f, gyro %d, mousey flag %s)\n",
         g_mouse_step ? "ok" : "FAILED", GetConfig().aim_track_pointer ? 1 : 0,
-        GetConfig().aim_sensitivity, g_mousey ? "found" : "not found");
+        GetConfig().aim_sensitivity, static_cast<int>(g_gyro), g_mousey ? "found" : "not found");
     return true;
 }
 

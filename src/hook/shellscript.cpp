@@ -228,66 +228,82 @@ void InjectWindowedCheckbox(char* data, size_t size) {
     WriteBack(data, size, text, "OM_Video.script", "Windowed checkbox");
 }
 
-// Options > Game: a "Throttle Decay:" row with the tab's own On/Off switch,
-// below Splash Damage, included in the tab's Reset. Talks to the hook through
-// option id kMwoThrottleDecay (202).
-void InjectThrottleDecay(char* data, size_t size) {
+// One On/Off row on Options > Game, using the tab's own label and switch
+// objects, placed one row below `above` (an existing s_OnOff object) and
+// included in the tab's Reset. The value is read and written through the
+// hook's option id. `id` names the script variables (n<id>, d<id>,
+// o<id>T, o<id>OnOff).
+bool AddGameSwitch(std::string* text, const char* id, const char* label, int row,
+                   const char* above, int option) {
+    char init[200];
+    sprintf_s(init,
+              "callback($$Shell_CallbackHandler$$,ShellGetOptionValue,%d,n%s)\r\n"
+              "mail(nMSG_UPDATETOGGLE,n%s,o%sOnOff)\r\n",
+              option, id, id, id);
+    char set[120];
+    sprintf_s(set, "callback($$Shell_CallbackHandler$$,ShellSetOptionValue,%d,", option);
+    char create[900];
+    sprintf_s(create,
+              "int n%s\r\n"
+              "int d%s\r\n"
+              "object o%sT = s_Text\r\n"
+              "o%sT.location = XIndent + TextX,YIndent + TextY + (%d * TextYOff),nZ_TEXT\r\n"
+              "o%sT.nFontID = IDS_F_OM_LABEL\r\n"
+              "o%sT.szText = \"%s\"\r\n"
+              "o%sT.cTextColor = cWhite\r\n"
+              "o%sT.nJustify = 0\r\n"
+              "o%sT.nLayoutWidth = TextW\r\n"
+              "o%sT.nLayoutHeight = TextH\r\n"
+              "initialize(o%sT)\r\n"
+              "object o%sOnOff = s_OnOff\r\n"
+              "o%sOnOff.location = %s.location.x,%s.location.y + TextYOff,%s.location.z\r\n"
+              "initialize(o%sOnOff)\r\n",
+              id, id, id, id, row, id, id, label, id, id, id, id, id, id, id, above, above,
+              above, id);
+    char mailbox[400];
+    sprintf_s(mailbox,
+              "case o%sOnOff:\r\n{\r\nif (getmessage() == nMSG_OPTIONON)\r\n{\r\nn%s = 1\r\n}\r\n"
+              "else\r\n{\r\nn%s = 0\r\n}\r\n%sn%s)\r\n}\r\nbreak\r\n",
+              id, id, id, set, id);
+    char record[60];
+    sprintf_s(record, "d%s = n%s\r\n", id, id);
+    char reset[160];
+    sprintf_s(reset, "%sd%s)\r\n", set, id);
+    char after_create[80];
+    sprintf_s(after_create, "initialize(%s)", above);
+
+    bool ok = InsertAfterLine(text, after_create, create);
+    const size_t gui_init = text->find("GUI_INIT");
+    ok = ok && gui_init != std::string::npos &&
+         InsertBeforeLine(text, "if (first_time)", gui_init, init);
+    ok = ok && InsertAfterLine(text, "dDiff = nDiff", record);
+    ok = ok && InsertAfterLine(text,
+                               "callback($$Shell_CallbackHandler$$,ShellOptionsSetToggleValue,"
+                               "MWO_SPLASHDAMAGE,dSplashToggle)",
+                               reset);
+    ok = ok && InsertBeforeLine(text, "case oSplashOnOff:", 0, mailbox);
+    return ok;
+}
+
+// Options > Game: "Throttle Decay:" below Splash Damage (option id 202), and
+// with the mouse aim point installed "Gyro Aim:" below that (option id 203).
+void InjectGameSwitches(char* data, size_t size) {
     std::string text(data, size);
     if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
         return;
     }
-    char init[200];
-    sprintf_s(init,
-              "callback($$Shell_CallbackHandler$$,ShellGetOptionValue,%d,nDecay)\r\n"
-              "mail(nMSG_UPDATETOGGLE,nDecay,oDecayOnOff)\r\n",
-              kMwoThrottleDecay);
-    char set[120];
-    sprintf_s(set, "callback($$Shell_CallbackHandler$$,ShellSetOptionValue,%d,", kMwoThrottleDecay);
-    const std::string create =
-        "int nDecay\r\n"
-        "int dDecay\r\n"
-        "object oDecayT = s_Text\r\n"
-        "oDecayT.location = XIndent + TextX,YIndent + TextY + (5 * TextYOff),nZ_TEXT\r\n"
-        "oDecayT.nFontID = IDS_F_OM_LABEL\r\n"
-        "oDecayT.szText = \"Throttle Decay:\"\r\n"
-        "oDecayT.cTextColor = cWhite\r\n"
-        "oDecayT.nJustify = 0\r\n"
-        "oDecayT.nLayoutWidth = TextW\r\n"
-        "oDecayT.nLayoutHeight = TextH\r\n"
-        "initialize(oDecayT)\r\n"
-        "object oDecayOnOff = s_OnOff\r\n"
-        "oDecayOnOff.location = oSplashOnOff.location.x,oSplashOnOff.location.y + TextYOff,"
-        "oSplashOnOff.location.z\r\n"
-        "initialize(oDecayOnOff)\r\n";
-    const std::string mailbox =
-        std::string("case oDecayOnOff:\r\n"
-                    "{\r\n"
-                    "if (getmessage() == nMSG_OPTIONON)\r\n"
-                    "{\r\n"
-                    "nDecay = 1\r\n"
-                    "}\r\n"
-                    "else\r\n"
-                    "{\r\n"
-                    "nDecay = 0\r\n"
-                    "}\r\n") +
-        set + "nDecay)\r\n}\r\nbreak\r\n";
-    const std::string reset = std::string(set) + "dDecay)\r\n";
-
-    bool ok = InsertAfterLine(&text, "initialize(oSplashOnOff)", create);
-    const size_t gui_init = text.find("GUI_INIT");
-    ok = ok && gui_init != std::string::npos &&
-         InsertBeforeLine(&text, "if (first_time)", gui_init, init);
-    ok = ok && InsertAfterLine(&text, "dDiff = nDiff", "dDecay = nDecay\r\n");
-    ok = ok && InsertAfterLine(&text,
-                               "callback($$Shell_CallbackHandler$$,ShellOptionsSetToggleValue,"
-                               "MWO_SPLASHDAMAGE,dSplashToggle)",
-                               reset);
-    ok = ok && InsertBeforeLine(&text, "case oSplashOnOff:", 0, mailbox);
+    bool ok = AddGameSwitch(&text, "Decay", "Throttle Decay:", 5, "oSplashOnOff",
+                            kMwoThrottleDecay);
+    const bool gyro = GetConfig().aim_track_pointer;
+    if (ok && gyro) {
+        ok = AddGameSwitch(&text, "Gyro", "Gyro Aim:", 6, "oDecayOnOff", kMwoGyroAim);
+    }
     if (!ok) {
-        Log("script: OM_Game.script anchors not found; Throttle Decay not added\n");
+        Log("script: OM_Game.script anchors not found; switches not added\n");
         return;
     }
-    WriteBack(data, size, text, "OM_Game.script", "Throttle Decay switch");
+    WriteBack(data, size, text, "OM_Game.script",
+              gyro ? "Throttle Decay and Gyro Aim switches" : "Throttle Decay switch");
 }
 
 // Development only ([debug] automation=1): save every shell script the game
@@ -353,7 +369,7 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         if (video) {
             InjectWindowedCheckbox(data, size);
         } else {
-            InjectThrottleDecay(data, size);
+            InjectGameSwitches(data, size);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("script: exception while inspecting archive entry\n");

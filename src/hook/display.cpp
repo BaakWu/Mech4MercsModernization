@@ -241,6 +241,14 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
             }
             return 1;
         }
+        if (option == kMwoGyroAim) {
+            if (cmd == kShellGetOptionValue) {
+                *value = GyroAimEnabled() ? 1 : 0;
+            } else {
+                SetGyroAim(*value != 0);
+            }
+            return 1;
+        }
         if (option == kMwoWindowed) {
             if (cmd == kShellGetOptionValue) {
                 *value = g_windowed ? 1 : 0;

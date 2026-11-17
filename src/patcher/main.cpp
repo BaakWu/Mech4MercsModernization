@@ -866,7 +866,7 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1) {
         SetIniValue(text, "aim", "track_pointer", use_mw5 ? "1" : "0");
         // Player tuning kept from an existing install.
         if (FileExists(existing)) {
-            for (const wchar_t* key : {L"sensitivity", L"marker"}) {
+            for (const wchar_t* key : {L"sensitivity", L"marker", L"gyro"}) {
                 wchar_t value[64] = {};
                 GetPrivateProfileStringW(L"aim", key, L"", value, 64, existing.c_str());
                 if (value[0]) {

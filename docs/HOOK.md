@@ -300,8 +300,49 @@ It works with the game's other torso controls:
 - **Torso keys** (held counters `+0x464`..`+0x470`) and **Center Torso**
   (`+0x6D0`) drive the torso as usual. The aim point follows the torso while
   they are in use.
-- Turning the legs (A/D) carries the aim point along, as in the stock game
-  (world-stabilized aim while turning is issue #17).
+- Turning the legs (A/D) carries the aim point along, as in the stock game,
+  unless Gyro Aim is on (below).
+
+**Gyro Aim** (issue #17). An On/Off switch on Options > Game, below Throttle
+Decay. It is only added when `track_pointer` is installed, uses option id 203
+and is saved as `[aim] gyro=` (off by default; the installer keeps it on
+Update). While the legs turn, from A/D or auto-centering, the aim point keeps
+its direction in the world:
+
+- The legs' heading is read from the mech's rotation matrix:
+  `atan2(mech+0xFC, mech+0xF4)`, mirrored at `+0x114` / `+0x11C`, with
+  + = left like the torso yaw. It was found by diffing the mech before and
+  after a held turn.
+- Each frame the legs' turn is taken off the torso's twist angle directly
+  (`torso+0x19C`, clamped to the twist limit), and the aim point moves with
+  it. So the torso holds its world direction like a gyro-stabilized turret,
+  however fast the legs turn.
+- At the twist limit the aim point stops and the torso is carried with the
+  legs. With Gyro Aim on, this also replaces the auto-centering compensation
+  above.
+- Mouse aiming still twists at the mech's own rate.
+
+A first version used a counter-rotation *command* instead. That is capped at
+the mech's twist rate, so on a held turn (legs turning faster than the torso
+can twist) the aim slid. Only light taps on A/D held.
+
+**Fairness.** The torso's world direction is held at the legs' full turn
+rate, which can exceed the mech's own twist rate. Turning and aiming add up:
+the aim can sweep faster than without Gyro Aim. That is why it is a visible
+gameplay option, not an install-time choice. Multiplayer behavior (the
+twist angle is set on the player's own mech) is untested.
+
+Verified (Instant Action, holding the turn keys, a mech with an 80° limit):
+
+- A held for 1.5 s turned the legs about 80° in 1.2 s (faster than this
+  mech's twist rate). The world aim stayed at −2.2757 rad, unchanged to the
+  last digit, until the torso reached the limit; from there it was carried.
+- D held for 4 s: the aim held until the opposite limit, then the torso was
+  carried.
+- Auto-centering afterwards brought the legs back while the aim held
+  exactly.
+- Switched Off in the menu: saved as `gyro=0`, and the aim turned with the
+  legs as in the stock game.
 
 Applies only with the mouse on and Mouse X Axis = Torso (the MW5 layout sets
 both). Otherwise, or with `track_pointer=0`, the stock code runs unchanged.
@@ -411,6 +452,7 @@ decay=0       ; Throttle Decay (also Options > Game; written there)
 track_pointer=0 ; mouse moves an aim point; the torso turns to it and stops
 sensitivity=1.0 ; aim point speed (x the game's mouse sensitivity slider)
 marker=1        ; small circle at the aim point (always shown in aim mode)
+gyro=0          ; Gyro Aim (Options > Game; written there)
 [frontend]
 stretch=1     ; scale the picture into the window
 [log]

@@ -65,6 +65,7 @@ void LoadConfig() {
     const float sensitivity = static_cast<float>(_wtof(value));
     g_config.aim_sensitivity = (sensitivity > 0.05f && sensitivity < 20.0f) ? sensitivity : 1.0f;
     g_config.aim_marker = GetPrivateProfileIntW(L"aim", L"marker", 1, path) != 0;
+    g_config.aim_gyro = GetPrivateProfileIntW(L"aim", L"gyro", 0, path) != 0;
 }
 
 }  // namespace

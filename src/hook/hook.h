@@ -17,6 +17,8 @@ namespace mw4hook {
 constexpr int kMwoWindowed = 200;
 // Option id for Options > Game > Throttle Decay (answered by the hook).
 constexpr int kMwoThrottleDecay = 202;
+// Option id for Options > Game > Gyro Aim (answered by the hook; issue #17).
+constexpr int kMwoGyroAim = 203;
 
 // Logging
 void LogInit(HINSTANCE self);
@@ -67,6 +69,7 @@ struct Config {
     bool aim_track_pointer = false;  // [aim] track_pointer: mouse moves an aim point (opt-in)
     float aim_sensitivity = 1.0f;    // [aim] sensitivity: multiplier on the game's slider
     bool aim_marker = true;          // [aim] marker: show where the torso is turning to
+    bool aim_gyro = false;           // [aim] gyro: initial Gyro Aim setting (Options > Game)
 };
 
 // MW5-style keyboard driving (controls.cpp).
@@ -81,6 +84,8 @@ void ApplyMw5Layout(int(__stdcall* callback)(DWORD, DWORD, int*), DWORD a1, DWOR
 // Mouse aim point (aim.cpp, issue #15).
 bool InstallAimHooks();
 void AimAfterDrive(char* controller, double now);
+bool GyroAimEnabled();
+void SetGyroAim(bool enabled);  // Options > Game; saved to mw4hook.ini
 
 const Config& GetConfig();
 

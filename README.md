@@ -37,6 +37,10 @@ Optional, chosen in the installer: **MechWarrior 5-style controls**:
   small circle, and the torso turns to it at its own speed and stops on it.
   There is no drift after the mouse stops, and a fast flick lands where a
   slow one does.
+- **Gyro Aim** (issue #17), an On/Off switch on Options > Game (off by
+  default): while the legs turn, the aim keeps its direction until the torso
+  reaches its twist limit. It lets you aim faster while turning, so it is a
+  per-player gameplay option.
 
 Leave it unticked to keep MW4's controls. Details in `docs/HOOK.md`.
 
