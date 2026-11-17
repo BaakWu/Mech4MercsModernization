@@ -28,9 +28,10 @@ The first release is a **windowed-mode patch**:
 Also included: **Throttle Decay**, an On/Off switch on Options > Game (off by
 default; the throttle eases back to zero when W/S is released).
 
-New pilots get working controls and **no camouflage** on their 'Mechs. MekTek's
-template profile gave every new unit "7-Ops - Pink" (issue #19). Each pilot's
-default camouflage can be changed on Options > Multiplayer > Skin.
+New pilots get working controls and a **camouflage of your choice**: Roster >
+New > Join Regiment has a Camouflage list (default None). MekTek's template
+profile gave every new unit "7-Ops - Pink" (issue #19). A pilot's default
+camouflage can be changed later on Options > Multiplayer > Skin.
 
 Optional, chosen in the installer: **MechWarrior 5-style controls**:
 

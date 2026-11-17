@@ -19,6 +19,8 @@ constexpr int kMwoWindowed = 200;
 constexpr int kMwoThrottleDecay = 202;
 // Option id for Options > Game > Gyro Aim (answered by the hook; issue #17).
 constexpr int kMwoGyroAim = 203;
+// Option id for Join Regiment > Camouflage (set only; issue #19).
+constexpr int kMwoNewPilotCamo = 204;
 
 // Logging
 void LogInit(HINSTANCE self);
@@ -93,6 +95,11 @@ bool GyroAimEnabled();
 bool InstallCamoHooks();
 void SetNewPilotCamo();
 void CancelNewPilotCamo();
+void ChooseNewPilotCamo(int index);  // Join Regiment > Camouflage
+constexpr int kCamoCount = 52;       // MekTek's MechLab camouflage list
+constexpr int kCamoNone = 51;        // "None" (code '_')
+extern const char* const kCamoNames[kCamoCount];
+int CamoIndex(char code);
 void SetGyroAim(bool enabled);  // Options > Game; saved to mw4hook.ini
 
 const Config& GetConfig();

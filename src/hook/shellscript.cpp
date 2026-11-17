@@ -30,6 +30,7 @@ MemberFetch_t g_member_fetch = nullptr;
 
 constexpr char kTargetName[] = "mercsshellscripts\\OM_Video.script";
 constexpr char kGameTarget[] = "mercsshellscripts\\OM_Game.script";
+constexpr char kJoinTarget[] = "mercsshellscripts\\JoinRegimentModal.script";
 constexpr char kMarker[] = "MW4HOOK_WINDOWED";
 
 // Entry layout (3.1c, matches the retail oracle's FUN_00413480/00413830).
@@ -306,6 +307,74 @@ void InjectGameSwitches(char* data, size_t size) {
               gyro ? "Throttle Decay and Gyro Aim switches" : "Throttle Decay switch");
 }
 
+// Roster > New > Join Regiment: a "Camouflage" list below Difficulty (the
+// dialog's own droplist style), with MekTek's camouflage names, starting at
+// [mechlab] default_camo. OK passes the choice to the hook (option id
+// kMwoNewPilotCamo, ShellSetOptionValue = 49) just before the pilot is
+// created; camo.cpp gives the new pilot's 'Mechs that camouflage. OK and
+// Cancel move down 25 pixels to make room (still inside the frame). The
+// list is hidden when the dialog is used to rename a pilot (Update).
+void InjectCamoChoice(char* data, size_t size) {
+    std::string text(data, size);
+    if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
+        return;
+    }
+    char head[200];
+    sprintf_s(head,
+              "int nCm\r\n"
+              "callback($$Shell_CallbackHandler$$,50,%d,nCm)\r\n"
+              "object oCm = s_droplistbox\r\n",
+              kMwoNewPilotCamo);
+    std::string create = head;
+    create +=
+        "oCm.location = 180, 395, 10\r\n"
+        "oCm.boxFont3D = FPATH localize$(IDS_F_GEN_DROPDOWN)\r\n"
+        "oCm.labelFont3D = FPATH localize$(IDS_F_GEN_LABEL)\r\n"
+        "oCm.label = \"Camouflage:\"\r\n"
+        "oCm.offsetLabel = 0, -15\r\n"
+        "oCm.itemWidth = 300 - 16\r\n"
+        "oCm.itemHeight = 20\r\n";
+    char sizes[160];
+    sprintf_s(sizes, "oCm.list_size = %d\r\noCm.max_displayed = 6\r\n", kCamoCount);
+    create += sizes;
+    for (int i = 0; i < kCamoCount; ++i) {
+        char line[96];
+        sprintf_s(line, "oCm.list_item[%d] = \"%s\"\r\n", i, kCamoNames[i]);
+        create += line;
+    }
+    // Open the list with the default in view (6 rows shown).
+    const int default_index = CamoIndex(GetConfig().default_camo);
+    char select[120];
+    sprintf_s(select, "oCm.nSelected = nCm\r\noCm.top_of_list = %d\r\ninitialize(oCm)\r\n",
+              default_index > 5 ? default_index - 5 : 0);
+    create += select;
+    char set[160];
+    sprintf_s(set,
+              "nCm = oCm.nselected\r\n"
+              "callback($$Shell_CallbackHandler$$,49,%d,nCm)\r\n",
+              kMwoNewPilotCamo);
+
+    bool ok = InsertAfterLine(&text, "initialize(DifficultyListBox)", create);
+    ok = ok && InsertAfterLine(&text, "initialize( DifficultyListBox )",
+                               "initialize(oCm)\r\n"
+                               "if (useUpdateTitleString)\r\n{\r\ndeactivate(oCm)\r\n}\r\n");
+    ok = ok && InsertAfterLine(&text, "deactivate( DifficultyListBox )", "deactivate(oCm)\r\n");
+    ok = ok && InsertBeforeLine(&text, "int create_flag = callback(", 0, set);
+    // OK / Cancel: 395 -> 420 (the frame ends at 450).
+    for (const char* button : {"180, 395, 10", "480, 395, 10"}) {
+        const size_t at = text.find(button);
+        ok = ok && at != std::string::npos;
+        if (at != std::string::npos) {
+            text.replace(at + 5, 3, "420");
+        }
+    }
+    if (!ok) {
+        Log("script: JoinRegimentModal.script anchors not found; camouflage list not added\n");
+        return;
+    }
+    WriteBack(data, size, text, "JoinRegimentModal.script", "Camouflage list");
+}
+
 // Development only ([debug] automation=1): save every shell script the game
 // loads to mw4hook-scripts\ in the game directory, as fetched (before any
 // rewrite), for reading the menus' logic.
@@ -355,7 +424,8 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         const size_t len = entry[kEntryNameLen];
         const bool video = len == sizeof(kTargetName) - 1 && _stricmp(name, kTargetName) == 0;
         const bool game = len == sizeof(kGameTarget) - 1 && _stricmp(name, kGameTarget) == 0;
-        if (!video && !game) {
+        const bool join = len == sizeof(kJoinTarget) - 1 && _stricmp(name, kJoinTarget) == 0;
+        if (!video && !game && !join) {
             return;
         }
         const DWORD stored = *reinterpret_cast<DWORD*>(entry + kEntryStored);
@@ -368,8 +438,10 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         }
         if (video) {
             InjectWindowedCheckbox(data, size);
-        } else {
+        } else if (game) {
             InjectGameSwitches(data, size);
+        } else {
+            InjectCamoChoice(data, size);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("script: exception while inspecting archive entry\n");

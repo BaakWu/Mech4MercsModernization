@@ -399,6 +399,21 @@ MekTek's per-pilot default, Options > Multiplayer > Skin.
   **None** with stock paint (the log showed the skin switched from '7' to
   '_'). Without the fix the same Flea showed "7-Ops - Pink".
 
+**Choosing it in Join Regiment.** Roster > New > Join Regiment gets a
+**Camouflage** list below Difficulty.
+
+- **How it is added:** `JoinRegimentModal.script` is rewritten in memory
+  like the Options tabs; it fits with 58 bytes spare. The list uses the
+  dialog's own droplist style and MekTek's 52 MechLab names, and starts at
+  `default_camo` (None).
+- **Layout:** OK and Cancel move down 25 pixels to make room, still inside
+  the frame. The list is hidden when the dialog renames a pilot (Update).
+- **On OK:** the script passes the choice to the hook (option id 204,
+  `ShellSetOptionValue`) just before `ShellCreateNewPilot`, and that pilot's
+  'Mechs get it as above.
+- **Verified:** with "1-Ops - Red" picked, the new pilot's starting Flea
+  was red and its MechLab showed "1-Ops - Red".
+
 ### Selected resolution
 
 The Resolution dropdown is filled by `ShellGetSupportedResolutions` from a

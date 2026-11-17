@@ -27,9 +27,49 @@
 #include "hook.h"
 
 namespace mw4hook {
+
+// MekTek's camouflage list as MechLab shows it (chassis.script). A skin's
+// code is the first character of its name; "None" is '_'.
+const char* const kCamoNames[kCamoCount] = {
+    "0-Ops - Blue", "1-Ops - Red", "2-Ops - Gold", "3-Ops - Green", "4-Ops - Orange",
+    "5-Ops - Cyan", "6-Ops - Purple", "7-Ops - Pink", "8-Snow - WinterWar",
+    "9-Snow - SnowBlind", "a-Snow - SnowBall", "b-Snow - Arctic",
+    "c-Alpine - Temperate Winter", "d-Alpine - Snow Leopard", "e-Alpine - Taiga Winter",
+    "f-Alpine - Ozark Winter", "g-Swamp - Great Dismal", "h-Swamp - Everglades",
+    "i-Swamp - Pripyat", "j-Swamp - Bayou", "k-Woodland - Hunter Woods",
+    "l-Woodland - Schwarzwald", "m-Woodland - Olympic Forest", "n-Woodland - Gecko",
+    "!-Grassland - Summer Tundra", "^-Grassland - Rhodesian Fall",
+    "#-Grassland - Steppe Spring", "$-Grassland - Great Plains", "%-Sand - Empty Quarter",
+    "o-Sand - Negev", "p-Sand - Sahara", "q-Sand - Mojave", "r-Rock - Desert Fox",
+    "s-Rock - Blood Stone", "t-Rock - Quattra Depression", "u-Rock - Savannah Tiger",
+    "v-Urban - Concrete", "w-Urban - Spiral Maze", "x-Urban - Headstone", "y-Urban - Skyline",
+    "z-Night Ops - Charred Steel", "~-Night Ops - Scorched Earth", "--Night Ops - Nightmare",
+    "&-Night Ops - Urban Assault", "+-Parade - Capellan Confederation",
+    ".-Parade - Draconis Combine", "(-Parade - Federated Suns", "'-Parade - Free Worlds League",
+    ")-Parade - Lyran Alliance", "]-Parade - Blue Solaris", "[-Parade - Red Solaris", "None",
+};
+
+char CamoCode(int index) {
+    if (index < 0 || index >= kCamoCount) {
+        return '\0';
+    }
+    return index == kCamoNone ? '_' : kCamoNames[index][0];
+}
+
+int CamoIndex(char code) {
+    for (int i = 0; i < kCamoCount; ++i) {
+        if (CamoCode(i) == code) {
+            return i;
+        }
+    }
+    return kCamoNone;
+}
+
 namespace {
 
 volatile LONG g_pending = 0;  // the current pilot is new: set its camouflage
+volatile LONG g_chosen = 0;   // camouflage picked in Join Regiment (code), 0 = none
+volatile LONG g_code = 0;     // the code to give the pending pilot
 void* g_trampoline[2] = {};
 
 // Called from the stubs with the pilot's skin holder (ecx); all registers
@@ -39,7 +79,7 @@ void __cdecl OnSkinRead(unsigned char* holder) {
         return;
     }
     InterlockedExchange(&g_pending, 0);
-    const char code = GetConfig().default_camo;
+    const char code = static_cast<char>(g_code);
     __try {
         const unsigned char before = holder[0x30];
         holder[0x30] = static_cast<unsigned char>(code);
@@ -78,13 +118,26 @@ bool g_installed = false;
 
 }  // namespace
 
-// The current pilot was just created: give it the default camouflage when
-// its first 'Mech is created.
+// Join Regiment's Camouflage list (option id kMwoNewPilotCamo, set just
+// before the pilot is created).
+void ChooseNewPilotCamo(int index) {
+    const char code = CamoCode(index);
+    InterlockedExchange(&g_chosen, static_cast<unsigned char>(code));
+    Log("camo: Join Regiment camouflage %d '%s'\n", index,
+        code ? kCamoNames[index] : "?");
+}
+
+// The current pilot was just created: give it its camouflage (the one picked
+// in Join Regiment, else [mechlab] default_camo) when its first 'Mech is
+// created.
 void SetNewPilotCamo() {
-    if (!GetConfig().default_camo) {
+    const char chosen = static_cast<char>(InterlockedExchange(&g_chosen, 0));
+    const char code = chosen ? chosen : GetConfig().default_camo;
+    if (!code) {
         Log("camo: default_camo is empty; new pilot keeps the template's skin\n");
         return;
     }
+    InterlockedExchange(&g_code, static_cast<unsigned char>(code));
     InterlockedExchange(&g_pending, 1);
 }
 
@@ -108,7 +161,7 @@ bool InstallCamoHooks() {
     if (b) {
         InstallDetour(b + 3, 6, reinterpret_cast<void*>(&Stub1), &g_trampoline[1]);
     }
-    Log("camo: new-'Mech skin hooks %s / %s (new pilots get '%c')\n",
+    Log("camo: new-'Mech skin hooks %s / %s (new pilots default to '%c')\n",
         g_trampoline[0] ? "ok" : "missing", g_trampoline[1] ? "ok" : "missing",
         GetConfig().default_camo ? GetConfig().default_camo : '-');
     return true;
