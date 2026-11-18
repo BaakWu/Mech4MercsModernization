@@ -29,6 +29,26 @@ DirectSoundCreate_t g_create = nullptr;  // trampoline
 CreateSoundBuffer_t g_create_buffer = nullptr;
 volatile LONG g_buffers = 0;
 
+// CreateSoundBuffer can fail with DSERR_BUFFERLOST while Windows briefly
+// reports the audio endpoint as unavailable (seen once at startup with a USB
+// headset as the default device; the game's own unmodified request failed
+// too). GameOS treats any failure as fatal and shows its error dialog, so a
+// lost-buffer failure is retried for up to ~250 ms before the game sees it.
+HRESULT CreateBufferRetrying(void* self, LPCDSBUFFERDESC desc, LPDIRECTSOUNDBUFFER* buffer,
+                             LPUNKNOWN outer) {
+    HRESULT result = g_create_buffer(self, desc, buffer, outer);
+    int retries = 0;
+    for (; result == DSERR_BUFFERLOST && retries < 25; ++retries) {
+        Sleep(10);
+        result = g_create_buffer(self, desc, buffer, outer);
+    }
+    if (retries > 0) {
+        Log("sound: CreateSoundBuffer lost the buffer; %d retries -> %08lX\n", retries,
+            static_cast<unsigned long>(result));
+    }
+    return result;
+}
+
 HRESULT WINAPI Hook_CreateSoundBuffer(void* self, LPCDSBUFFERDESC desc,
                                       LPDIRECTSOUNDBUFFER* buffer, LPUNKNOWN outer) {
     if (desc && desc->dwSize >= sizeof(DSBUFFERDESC1) &&
@@ -36,7 +56,7 @@ HRESULT WINAPI Hook_CreateSoundBuffer(void* self, LPCDSBUFFERDESC desc,
         DSBUFFERDESC copy{};
         memcpy(&copy, desc, desc->dwSize < sizeof(copy) ? desc->dwSize : sizeof(copy));
         copy.dwFlags |= DSBCAPS_GLOBALFOCUS;
-        const HRESULT result = g_create_buffer(self, &copy, buffer, outer);
+        const HRESULT result = CreateBufferRetrying(self, &copy, buffer, outer);
         if (SUCCEEDED(result)) {
             if (InterlockedIncrement(&g_buffers) == 1) {
                 Log("sound: buffers keep playing in the background (DSBCAPS_GLOBALFOCUS)\n");
@@ -47,7 +67,7 @@ HRESULT WINAPI Hook_CreateSoundBuffer(void* self, LPCDSBUFFERDESC desc,
         Log("sound: CreateSoundBuffer with GLOBALFOCUS failed (%08lX); unchanged\n",
             static_cast<unsigned long>(result));
     }
-    return g_create_buffer(self, desc, buffer, outer);
+    return CreateBufferRetrying(self, desc, buffer, outer);
 }
 
 void PatchDirectSound(IDirectSound* ds) {

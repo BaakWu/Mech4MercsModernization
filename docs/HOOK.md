@@ -203,6 +203,18 @@ GameOS loads `dsound.dll` itself (`LoadLibrary` + `GetProcAddress
 Input still pauses while the window is inactive (GameOS skips its input
 update then). `[sound] background=0` restores the stock behaviour.
 
+**Lost buffer at startup (2026-11-17).** One launch stopped on GameOS'
+error dialog: `CreateSoundBuffer` (`DSBCAPS_CTRLVOLUME | DSBCAPS_LOCSOFTWARE`,
+16-bit stereo 22050 Hz) failed with `DSERR_BUFFERLOST` (`0x88780096`) about
+5 s in. The default device was a USB headset's chat endpoint. Earlier buffers
+had been created fine. The hook's fallback to the game's unmodified request
+failed the same way, so the flag was not the cause; the endpoint was briefly
+unavailable. Two later launches did not reproduce it. The hook now retries a
+`DSERR_BUFFERLOST` failure every 10 ms, up to 25 times, before the game sees
+it, and logs `sound: CreateSoundBuffer lost the buffer; N retries`. Not yet
+verified against a real recurrence. Applies only while `[sound] background`
+is on, since that installs the hook.
+
 ### Direct3D: per-frame display rebuild, depth buffer
 
 Found 2026-11-16 by A/B with all display features disabled (the stock game
