@@ -880,8 +880,12 @@ See `docs/KNOWN-ISSUES.md` for the full list. In short: mission rendering
 artifacts and garbled audio are pre-existing or unconfirmed; AntiHack and
 multiplayer are untested; the 100-cycle toggle test is still to do.
 
-## Reversibility
+## Uninstall
 
 - `mw4patch.exe uninstall` removes `dinput.dll`, `ddraw.dll`, `mw4hook.ini`
   and the windowed shortcut and restores `options.ini` and the old shortcut.
 - No game file on disk is changed; all patches are in memory.
+- Not rolled back: what the game saved while patched (pilot profiles,
+  campaign progress, key bindings such as the MW5 layout, chosen
+  camouflage). Settings changed in `options.ini` after install are lost
+  when the install-time backup is restored.

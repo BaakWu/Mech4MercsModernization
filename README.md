@@ -1,11 +1,12 @@
 # MechWarrior 4 Mercenaries Modernization Patch
 
-An independent, reversible patch for **MechWarrior 4: Mercenaries 3.1c**
+An independent patch for **MechWarrior 4: Mercenaries 3.1c**
 (`51.03.01.0030`).
 
 It makes the original game launch and play correctly on modern Windows and
-adds a few optional quality-of-life features, without replacing the engine,
-breaking AntiHack, or shipping game files.
+adds a few optional quality-of-life features, without replacing the engine or
+shipping game files. It has not yet been tested with MekTek AntiHack or in
+multiplayer.
 
 > **Status:** releases are on the GitHub Releases page as a GUI installer,
 > `MW4Mercs-ModernizationPatch-Setup-<version>.exe`.
@@ -43,7 +44,6 @@ hardware incompatibility but are often configuration or compatibility bugs.
 - fixes for four bugs in the stock game on current Windows: low mission frame
   rate, garbled audio, see-through terrain, and a window that froze on a
   second monitor
-- the game's **AntiHack stays active and untouched**
 
 Gameplay settings, each an On/Off switch on Options > Game (off by default):
 
@@ -115,9 +115,12 @@ on or off (**Update**; your resolution and settings are kept), or to
 restart itself as administrator.
 
 The fix layer is loaded at runtime rather than rewriting `MW4Mercs.exe`. That
-keeps the patch reversible and avoids touching the game’s AntiHack or the code
-regions used by the multiplayer integrity check. No game file is changed:
-after uninstalling, the folder matches the original 3.1c manifest again.
+avoids editing the code regions used by the multiplayer integrity check;
+whether the patch works with AntiHack and multiplayer has not been tested
+yet. No game file is changed. Uninstalling does not undo what the game saved
+while the patch was installed: pilots, campaign progress, key bindings and
+camouflage stay as they are, and `options.ini` goes back to
+the copy taken at install, so settings changed since then are lost.
 
 Build the installer with:
 
@@ -279,7 +282,7 @@ Good contributions at this stage:
   layouts
 - documenting exact game versions and hashes
 - mapping the retail decompilation behavior onto the 3.1c binary
-- implementing small, reversible fixes with tests
+- implementing small fixes, each with an off switch and tests
 
 Please keep changes focused and document any binary-level work with the target
 file hash, original bytes or pattern, and observed behavior.

@@ -1,0 +1,140 @@
+<!doctype html>
+<!--
+  Source of the patch logo (logo-1024x768.png, logo-1024x768-transparent.png).
+  Original artwork; the font is Bahnschrift (ships with Windows 10/11).
+
+  Render (from this folder, any Chromium browser):
+    chrome --headless=new --hide-scrollbars --force-device-scale-factor=1
+           --default-background-color=00000000 --window-size=1024,768
+           --screenshot=logo-1024x768.png logo.html
+  Add "#transparent" to the URL for the version without the background.
+-->
+<html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;background:transparent;overflow:hidden}
+  svg{display:block}
+  .cond{font-family:"Bahnschrift";font-variation-settings:"wght" 700,"wdth" 75}
+  .semi{font-family:"Bahnschrift";font-variation-settings:"wght" 600,"wdth" 85}
+  body.transparent #bg{display:none}
+</style></head>
+<body>
+<svg width="1024" height="768" viewBox="0 0 1024 768" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="vig" cx="50%" cy="45%" r="70%">
+      <stop offset="0" stop-color="#23272a"/>
+      <stop offset="0.6" stop-color="#121415"/>
+      <stop offset="1" stop-color="#050606"/>
+    </radialGradient>
+    <pattern id="plate" width="28" height="28" patternUnits="userSpaceOnUse">
+      <rect x="4" y="11" width="12" height="4" rx="2" fill="#fff" transform="rotate(45 10 13)"/>
+      <rect x="18" y="-3" width="12" height="4" rx="2" fill="#fff" transform="rotate(-45 24 -1)"/>
+      <rect x="18" y="25" width="12" height="4" rx="2" fill="#fff" transform="rotate(-45 24 27)"/>
+    </pattern>
+    <pattern id="hazard" width="28" height="28" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="28" height="28" fill="#141414"/>
+      <rect width="14" height="28" fill="#d9a21b"/>
+    </pattern>
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6f8f9"/>
+      <stop offset="0.42" stop-color="#c3cacf"/>
+      <stop offset="0.5" stop-color="#5d666b"/>
+      <stop offset="0.68" stop-color="#9aa3a8"/>
+      <stop offset="1" stop-color="#e6e9eb"/>
+    </linearGradient>
+    <linearGradient id="hexOuter" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b9c0c5"/>
+      <stop offset="0.5" stop-color="#5a6267"/>
+      <stop offset="1" stop-color="#2a2f32"/>
+    </linearGradient>
+    <linearGradient id="hexBevel" x1="1" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#9aa2a7"/>
+      <stop offset="1" stop-color="#2b3033"/>
+    </linearGradient>
+    <radialGradient id="recess" cx="50%" cy="40%" r="65%">
+      <stop offset="0" stop-color="#22282b"/>
+      <stop offset="1" stop-color="#0b0d0e"/>
+    </radialGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd25a"/>
+      <stop offset="1" stop-color="#e58a12"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="titleFx" x="-10%" y="-40%" width="120%" height="180%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="10" result="blur"/>
+      <feFlood flood-color="#ff8a1a" flood-opacity="0.35"/>
+      <feComposite in2="blur" operator="in" result="halo"/>
+      <feOffset in="SourceAlpha" dx="0" dy="5" result="off"/>
+      <feGaussianBlur in="off" stdDeviation="3" result="offb"/>
+      <feFlood flood-color="#000" flood-opacity="0.85"/>
+      <feComposite in2="offb" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="halo"/><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000" flood-opacity="0.8"/>
+    </filter>
+  </defs>
+
+  <!-- background (omitted in the transparent variant) -->
+  <g id="bg">
+    <rect width="1024" height="768" fill="url(#vig)"/>
+    <rect width="1024" height="768" fill="url(#plate)" opacity="0.035"/>
+    <!-- corner brackets -->
+    <g fill="none" stroke="#596166" stroke-width="4" stroke-linecap="square">
+      <path d="M40 110 V40 H110"/><path d="M984 110 V40 H914"/>
+      <path d="M40 658 V728 H110"/><path d="M984 658 V728 H914"/>
+    </g>
+    <g fill="#d9a21b">
+      <rect x="38" y="38" width="10" height="10"/><rect x="976" y="38" width="10" height="10"/>
+      <rect x="38" y="720" width="10" height="10"/><rect x="976" y="720" width="10" height="10"/>
+    </g>
+  </g>
+
+  <!-- emblem: hex nut plate with reticle and upgrade chevrons -->
+  <g filter="url(#drop)">
+    <polygon points="642,235 577,122.4 447,122.4 382,235 447,347.6 577,347.6" fill="url(#hexOuter)" stroke="#111" stroke-width="3"/>
+    <polygon points="626,235 569,136.3 455,136.3 398,235 455,333.7 569,333.7" fill="url(#hexBevel)"/>
+    <polygon points="612,235 562,148.4 462,148.4 412,235 462,321.6 562,321.6" fill="url(#recess)" stroke="#000" stroke-width="2"/>
+    <g fill="#1a1d1f" stroke="#8e979c" stroke-width="1.5">
+      <circle cx="634" cy="235" r="4.5"/><circle cx="573" cy="129.4" r="4.5"/><circle cx="451" cy="129.4" r="4.5"/>
+      <circle cx="390" cy="235" r="4.5"/><circle cx="451" cy="340.6" r="4.5"/><circle cx="573" cy="340.6" r="4.5"/>
+    </g>
+  </g>
+  <g filter="url(#glow)">
+    <circle cx="512" cy="235" r="70" fill="none" stroke="#e8a21c" stroke-width="4" stroke-dasharray="88 22" transform="rotate(-62 512 235)"/>
+    <circle cx="512" cy="235" r="56" fill="none" stroke="#e8a21c" stroke-width="1.5" opacity="0.55"/>
+    <g stroke="#e8a21c" stroke-width="4" stroke-linecap="butt">
+      <line x1="512" y1="152" x2="512" y2="174"/><line x1="512" y1="296" x2="512" y2="318"/>
+      <line x1="425" y1="235" x2="447" y2="235"/><line x1="577" y1="235" x2="599" y2="235"/>
+    </g>
+    <g fill="none" stroke="url(#amber)" stroke-width="11" stroke-linejoin="miter" stroke-linecap="square">
+      <polyline points="484,264 512,236 540,264"/>
+      <polyline points="484,232 512,204 540,232"/>
+    </g>
+  </g>
+
+  <!-- game line -->
+  <text x="512" y="398"text-anchor="middle" class="semi" font-size="23" letter-spacing="9" fill="#9da6ab">MECHWARRIOR 4: MERCENARIES</text>
+
+  <!-- title -->
+  <text x="512" y="512" text-anchor="middle" class="cond" font-size="122" textLength="840" lengthAdjust="spacing"
+        fill="url(#steel)" stroke="#111416" stroke-width="3" paint-order="stroke" filter="url(#titleFx)">MODERNIZATION</text>
+
+  <!-- PATCH band -->
+  <g>
+    <rect x="92" y="546" width="300" height="30" fill="url(#hazard)" stroke="#2a2f32" stroke-width="3"/>
+    <rect x="632" y="546" width="300" height="30" fill="url(#hazard)" stroke="#2a2f32" stroke-width="3"/>
+    <text x="512" y="574" text-anchor="middle" class="cond" font-size="44" letter-spacing="16" dx="8"
+          fill="url(#amber)" stroke="#120c02" stroke-width="2" paint-order="stroke" filter="url(#glow)">PATCH</text>
+  </g>
+
+  <!-- footer -->
+  <line x1="352" y1="640" x2="672" y2="640" stroke="#3a4145" stroke-width="2"/>
+  <text x="512" y="672" text-anchor="middle" class="semi" font-size="17" letter-spacing="7" fill="#6f797e">FOR VERSION 3.1c</text>
+</svg>
+<script>
+  if (location.hash === '#transparent') document.body.classList.add('transparent');
+</script>
+</body></html>
