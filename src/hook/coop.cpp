@@ -17,6 +17,7 @@
 #include "hook.h"
 
 #include <intrin.h>
+#include <tlhelp32.h>
 #include <cstdio>
 #include <cstring>
 
@@ -33,6 +34,8 @@ void* g_script_load = nullptr;       // the single-player branch (load the missi
 char g_mission[64] = {};
 char g_path[MAX_PATH] = {};
 
+void* Campaign();
+
 void __fastcall Hook_SetMissionPath(void* game, void* /*edx*/, const char* path) {
     void* ret = _ReturnAddress();
     const bool network = ret == g_net_return;
@@ -46,6 +49,10 @@ void __fastcall Hook_SetMissionPath(void* game, void* /*edx*/, const char* path)
     g_own_script = use != path;  // the next mission load keeps the mission's own script
     Log("coop: SetMissionPath \"%s\" from %p (%s)%s%s\n", path ? path : "(null)", ret,
         network ? "network start" : "other", use != path ? " -> " : "", use != path ? use : "");
+    Log("coop: campaign %p, shell mode %d\n", Campaign(),
+        *reinterpret_cast<unsigned char**>(0x0103D850)
+            ? *reinterpret_cast<int*>(*reinterpret_cast<unsigned char**>(0x0103D850) + 0x24)
+            : -99);
     g_set_path(game, use);
 }
 
@@ -111,6 +118,25 @@ __declspec(naked) void StubAiGate() {
     }
 }
 
+// MW4Shell::InitMPScreen (3.1c 0x00507FE0), run when the network hosting
+// screens open, deletes the loaded campaign (globals+0x44):
+//   mov [esi+409A0h],eax; mov eax,[..]; mov edx,[..]; mov ecx,[eax]; xor ecx,edx;
+//   mov eax,[ecx+44h]; mov edx,eax; xor edx,85739531h; je <keep>; ... delete
+// A co-op host keeps its campaign (the mission result goes to it at the end),
+// so with coop_mission set the je becomes jmp.
+void InstallKeepCampaign() {
+    unsigned char* site = FindUnique(
+        "mp_screen_campaign_delete",
+        "89 86 A0 09 04 00 A1 ?? ?? ?? ?? 8B 15 ?? ?? ?? ?? 8B 08 33 CA 8B 41 44 8B D0 81 F2 31 "
+        "95 73 85 74");
+    if (!site) {
+        return;
+    }
+    const unsigned char jmp = 0xEB;
+    const bool ok = WriteCode(site + 32, &jmp, 1);
+    Log("coop: network screens keep the campaign: %s\n", ok ? "patched" : "FAILED");
+}
+
 void InstallAiGate() {
     unsigned char* site = FindUnique(
         "mission_ai_gate",
@@ -142,8 +168,28 @@ void __fastcall Hook_SetEndDelay(void* mission, void*, float seconds) {
     g_set_end_delay(mission, seconds);
 }
 
+// The loaded campaign (null outside a campaign). The game's globals are
+// reached through [[0x103B0BC]] ^ [0x103B0B8]; their +0x44 holds the campaign
+// XOR 0x85739531. At a mission's end 0x0060B263 hands the result to it
+// (0x00623FD0: pay, salvage, ratings) when it is there.
+void* Campaign() {
+    const uintptr_t holder = *reinterpret_cast<uintptr_t*>(0x0103B0BC);
+    if (!holder) {
+        return nullptr;
+    }
+    const uintptr_t globals =
+        *reinterpret_cast<uintptr_t*>(holder) ^ *reinterpret_cast<uintptr_t*>(0x0103B0B8);
+    return reinterpret_cast<void*>(*reinterpret_cast<uintptr_t*>(globals + 0x44) ^ 0x85739531u);
+}
+
+volatile DWORD g_result_thread = 0;  // thread that set the mission result (the game's)
+volatile DWORD g_result_tick = 0;
+
 void __fastcall Hook_SetResult(void* mission, void*, bool won) {
-    Log("coop: mission result %s from %p\n", won ? "won" : "lost", _ReturnAddress());
+    g_result_thread = GetCurrentThreadId();
+    g_result_tick = GetTickCount();
+    Log("coop: mission result %s from %p (campaign %p)\n", won ? "won" : "lost",
+        _ReturnAddress(), Campaign());
     g_set_result(mission, won);
 }
 
@@ -196,6 +242,23 @@ void __fastcall Hook_RequestStop(void* app, void*, int arg) {
         return;
     }
     LogStack("RequestStop");
+    if (g_own_script && reinterpret_cast<uintptr_t>(ret) == 0x0060B2AB) {
+        // The mission's own result ended it (0x0060B2A8, after the campaign
+        // got the result). The end-game handler (slot 6, 0x0052F260) recycles
+        // a network game to the scoreboard unless the stop argument
+        // (app+0xCE) is set; then it stops like a single-player game. The
+        // menus then open GetStartScreen's pick (0x00502900): with the shell's
+        // mode (shell+0x24; 0 campaign, 2 Instant Action, 3 network) set to
+        // campaign, that is the post-mission screen.
+        unsigned char* shell = *reinterpret_cast<unsigned char**>(0x0103D850);
+        if (shell) {
+            Log("coop: co-op mission end: stop (not recycle), shell mode %d -> 0\n",
+                *reinterpret_cast<int*>(shell + 0x24));
+            *reinterpret_cast<int*>(shell + 0x24) = 0;
+        }
+        g_request_stop(app, 1);
+        return;
+    }
     g_request_stop(app, arg);
 }
 
@@ -241,8 +304,22 @@ void LogStackFrom(const char* what, void** sp) {
     Log("%s\n", line);
 }
 
+volatile LONG g_watch_hits = 0;
+
 LONG CALLBACK CoopExceptionLog(EXCEPTION_POINTERS* info) {
     const DWORD code = info->ExceptionRecord->ExceptionCode;
+    if (code == EXCEPTION_SINGLE_STEP && (info->ContextRecord->Dr6 & 1)) {
+        // The campaign slot's data breakpoint (CampaignWatch): EIP is the
+        // instruction after the write.
+        info->ContextRecord->Dr6 = 0;
+        if (InterlockedIncrement(&g_watch_hits) <= 10) {
+            char what[96];
+            sprintf_s(what, "campaign slot written before %08lX -> %p",
+                      static_cast<unsigned long>(info->ContextRecord->Eip), Campaign());
+            LogStackFrom(what, reinterpret_cast<void**>(info->ContextRecord->Esp));
+        }
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     if (code < 0xC0000000 || code == 0xE06D7363) {
         return EXCEPTION_CONTINUE_SEARCH;  // only errors (access violation, ...)
     }
@@ -267,7 +344,118 @@ struct ExitLog {
     }
 } g_exit_log;
 
+// Logs when the campaign is loaded/unloaded, the shell's mode changes, or the
+// game loop switches (0x01240974: 0x0052B940 menus, 0x0052EBA0 mission).
+// A write data breakpoint (DR0) on the campaign slot in every other thread, so
+// the exception log names the code that replaces or clears it.
+bool ArmCampaignBreakpoint() {
+    const uintptr_t holder = *reinterpret_cast<uintptr_t*>(0x0103B0BC);
+    if (!holder) {
+        return false;
+    }
+    const uintptr_t slot = (*reinterpret_cast<uintptr_t*>(holder) ^
+                            *reinterpret_cast<uintptr_t*>(0x0103B0B8)) + 0x44;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    int armed = 0;
+    THREADENTRY32 te{sizeof(te)};
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != GetCurrentProcessId() ||
+            te.th32ThreadID == GetCurrentThreadId()) {
+            continue;
+        }
+        HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME,
+                              FALSE, te.th32ThreadID);
+        if (!t) {
+            continue;
+        }
+        if (SuspendThread(t) != static_cast<DWORD>(-1)) {
+            CONTEXT ctx{};
+            ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            if (GetThreadContext(t, &ctx)) {
+                ctx.Dr0 = slot;
+                ctx.Dr7 = (ctx.Dr7 & ~0x000F0003u) | 1u | (1u << 16) | (3u << 18);  // L0, write, 4 bytes
+                if (SetThreadContext(t, &ctx)) {
+                    ++armed;
+                }
+            }
+            ResumeThread(t);
+        }
+        CloseHandle(t);
+    }
+    CloseHandle(snap);
+    Log("coop: campaign slot %08X watched in %d threads\n", static_cast<unsigned>(slot), armed);
+    return armed > 0;
+}
+
+DWORD WINAPI CampaignWatch(LPVOID) {
+    bool armed = false;
+    void* last_campaign = reinterpret_cast<void*>(1);
+    int last_mode = -100;
+    uintptr_t last_loop = 1;
+    int samples = 0;
+    DWORD next_sample = 0;
+    for (;;) {
+        Sleep(200);
+        // After a mission result, sample the game thread's position a few
+        // times (a freeze after the player's death showed no exception).
+        if (g_result_thread && samples < 8 && GetTickCount() - g_result_tick > 3000 &&
+            static_cast<LONG>(GetTickCount() - next_sample) >= 0) {
+            next_sample = GetTickCount() + 2000;
+            ++samples;
+            if (HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE,
+                                      g_result_thread)) {
+                if (SuspendThread(t) != static_cast<DWORD>(-1)) {
+                    CONTEXT ctx{};
+                    ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+                    if (GetThreadContext(t, &ctx)) {
+                        char what[96];
+                        sprintf_s(what, "game thread sample %d at %08lX", samples,
+                                  static_cast<unsigned long>(ctx.Eip));
+                        LogStackFrom(what, reinterpret_cast<void**>(ctx.Esp));
+                        // The EBP chain (frames that keep a frame pointer).
+                        char line[512];
+                        int n = sprintf_s(line, "coop:   ebp chain:");
+                        uintptr_t* fp = reinterpret_cast<uintptr_t*>(ctx.Ebp);
+                        for (int k = 0; k < 24 && fp && !IsBadReadPtr(fp, 8); ++k) {
+                            n += sprintf_s(line + n, sizeof(line) - n, " %08X",
+                                           static_cast<unsigned>(fp[1]));
+                            uintptr_t* up = reinterpret_cast<uintptr_t*>(fp[0]);
+                            if (up <= fp) {
+                                break;
+                            }
+                            fp = up;
+                        }
+                        Log("%s\n", line);
+                    }
+                    ResumeThread(t);
+                }
+                CloseHandle(t);
+            }
+        }
+        void* campaign = Campaign();
+        unsigned char* shell = *reinterpret_cast<unsigned char**>(0x0103D850);
+        const int mode = shell ? *reinterpret_cast<int*>(shell + 0x24) : -99;
+        const uintptr_t loop = *reinterpret_cast<uintptr_t*>(0x01240974);
+        if (campaign && !armed) {
+            armed = ArmCampaignBreakpoint();
+        }
+        if (campaign != last_campaign || mode != last_mode || loop != last_loop) {
+            Log("coop: watch campaign %p, shell mode %d, loop %08X\n", campaign, mode,
+                static_cast<unsigned>(loop));
+            last_campaign = campaign;
+            last_mode = mode;
+            last_loop = loop;
+        }
+    }
+}
+
 void InstallEndTrace() {
+    if (HANDLE watch = CreateThread(nullptr, 0, CampaignWatch, nullptr, 0, nullptr)) {
+        CloseHandle(watch);
+    }
     AddVectoredExceptionHandler(1, CoopExceptionLog);
     g_exit_log.armed = true;
     InstallStateTrace();
@@ -336,6 +524,7 @@ bool InstallCoopHooks() {
     if (g_mission[0]) {
         InstallScriptChoice();
         InstallAiGate();
+        InstallKeepCampaign();
     }
     return true;
 }
