@@ -62,6 +62,7 @@ constexpr size_t kPitchCmd = 0x2E0;
 constexpr size_t kYawCmd = 0x2E4;
 constexpr size_t kKeysFirst = 0x464;  // four int counters
 constexpr size_t kCentering = 0x6D0;
+constexpr size_t kLegsTurnCmd = 0x2DC;  // legs' turn rate command (-1..1, + = left)
 constexpr size_t kMech = 0x38C;
 constexpr size_t kMechParts = 0x440;
 constexpr size_t kTwistLimit = 0x76C;
@@ -78,6 +79,9 @@ constexpr int kAxisTorso = 2;
 // 160 degrees of twist for 3 inches at 800 counts per inch.
 constexpr float kRadiansPerSensitivity = 0.116f;
 constexpr float kDefaultRate = 0.9f;  // rad/s at full command, until measured
+// Closer than this to the aim point counts as on it (rad; one pixel at
+// 1024x768 is about 0.0009 rad).
+constexpr float kOnTarget = 0.0005f;
 
 using MouseStep_t = void(__thiscall*)(void*, double);
 MouseStep_t g_mouse_step = nullptr;
@@ -103,6 +107,11 @@ struct State {
     Axis pitch;
     float heading = 0.0f;  // legs' heading last frame
     bool have_heading = false;
+    // Gyro Aim's prediction of the legs' turn (issue #33).
+    float last_dt = 0.0f;    // the previous frame's time step
+    float legs_cmd = 0.0f;   // the previous frame's legs' turn command
+    float legs_rate = 0.0f;  // learned legs' turn rate, rad/s at full command (0 = unknown)
+    float predicted = 0.0f;  // legs' turn predicted (and taken off) for the last frame
     // For the marker (read by the ddraw proxy through Mw4AimMarker).
     volatile float marker_yaw = 0.0f;    // aim point minus torso, rad
     volatile float marker_pitch = 0.0f;
@@ -172,8 +181,17 @@ float Steer(Axis& axis, float angle, float applied, double dt) {
     }
     axis.last_angle = angle;
     axis.last_applied = applied;
+    // On target: exactly 0. The proportional tail never reaches 0 by itself.
+    // The game starts the torso twist sound (sfx_torso.wav, event 0x17) for
+    // any yaw command other than exactly 0.0 (0x0054E0AA) but only moves the
+    // torso for |cmd| >= 0.0001, so the leftover command kept the sound
+    // playing with the torso still (issue #32). kOnTarget is under a pixel.
+    const float error = axis.target - angle;
+    if (std::fabs(error) < kOnTarget) {
+        return 0.0f;
+    }
     const float tau = static_cast<float>(dt > 0.0 ? (dt * 2.0 > 0.06 ? dt * 2.0 : 0.06) : 0.06);
-    return Clamp((axis.target - angle) / (axis.rate * tau), -1.0f, 1.0f);
+    return Clamp(error / (axis.rate * tau), -1.0f, 1.0f);
 }
 
 // The legs' heading (rad, + = left, like the torso yaw) from the mech's
@@ -232,12 +250,17 @@ void AimAfterDrive(char* self, double now) {
         dt = 0.0;
     }
     g.last_now = now;
+    const float prev_dt = g.last_dt;  // the time step the legs' last turn took
+    g.last_dt = static_cast<float>(dt);
     if (g.torso != torso) {
         // New mech or mission: start at the torso's current aim.
         g.torso = torso;
         g.yaw = Axis{yaw, kDefaultRate, yaw, 0.0f};
         g.pitch = Axis{pitch, kDefaultRate, pitch, 0.0f};
         g.have_heading = false;
+        g.legs_cmd = 0.0f;
+        g.legs_rate = 0.0f;
+        g.predicted = 0.0f;
     }
     // How far the legs turned since the last frame (rad, + = left).
     float heading = 0.0f;
@@ -247,12 +270,27 @@ void AimAfterDrive(char* self, double now) {
             legs_turn = WrapAngle(heading - g.heading);
             if (std::fabs(legs_turn) > 0.5f) {
                 legs_turn = 0.0f;  // a jump (respawn, teleport), not a turn
+                g.predicted = 0.0f;
             }
         }
         g.heading = heading;
         g.have_heading = true;
     } else {
         g.have_heading = false;
+    }
+    // The legs turn in the frame's update, after this step, by their turn
+    // rate x their turn command (+0x2DC, set by A/D and the Center Legs
+    // commands) x the frame's time; measured: 0.957 rad/s on the test
+    // Archer, the same at every command and frame time. Learn the rate from
+    // the last frame (it changes with the mech and its speed).
+    const float legs_cmd = At<float>(self, kLegsTurnCmd);
+    const float prev_legs_cmd = g.legs_cmd;
+    g.legs_cmd = legs_cmd;
+    if (legs_turn != 0.0f && std::fabs(prev_legs_cmd) > 0.05f && prev_dt > 0.0f) {
+        const float k = legs_turn / (prev_legs_cmd * prev_dt);
+        if (k > 0.05f && k < 10.0f) {
+            g.legs_rate = k;
+        }
     }
 
     const float sensitivity =
@@ -270,6 +308,7 @@ void AimAfterDrive(char* self, double now) {
         game_drives = game_drives || At<int>(self, kKeysFirst + 4 * i) > 0;
     }
     if (game_drives) {
+        g.predicted = 0.0f;
         g.yaw.target = yaw;
         g.pitch.target = pitch;
         g.yaw.last_angle = yaw;
@@ -302,14 +341,36 @@ void AimAfterDrive(char* self, double now) {
         // held turn). The aim point moves with it. At the twist limit both
         // stop and the torso is carried with the legs. Mouse aiming still
         // twists at the mech's own rate.
-        g.yaw.target = Clamp(g.yaw.target - legs_turn, -twist_limit, twist_limit);
-        if (legs_turn != 0.0f) {
-            steer_yaw = Clamp(yaw - legs_turn, -twist_limit, twist_limit);
+        //
+        // The legs turn later in the frame, after this step, and the frame is
+        // drawn after that. Taking off only the turn measured since the last
+        // step left the drawn aim one frame of leg turn off; that amount
+        // changes with every frame's length, so the view shook while A/D
+        // was held (issue #33). So this frame's turn is predicted from the
+        // legs' turn command and taken off now, and whatever the last
+        // prediction missed is taken off as well.
+        float predict = 0.0f;
+        if (g.legs_rate > 0.0f && dt > 0.0) {
+            predict = g.legs_rate * legs_cmd * static_cast<float>(dt);
+        }
+        const float correction = legs_turn - g.predicted + predict;
+        g.predicted = predict;
+        if (GetConfig().debug_automation && (legs_turn != 0.0f || correction != 0.0f)) {
+            // drawn_world: the torso's world direction in the frame just drawn.
+            Log("gyro: t=%.4f dt=%.4f turn=%+.5f legs_cmd=%+.3f drawn_world=%+.5f correction=%+.5f "
+                "predict=%+.5f rate=%.3f\n",
+                now, dt, legs_turn, legs_cmd, WrapAngle(heading + yaw), correction, predict,
+                g.legs_rate);
+        }
+        g.yaw.target = Clamp(g.yaw.target - correction, -twist_limit, twist_limit);
+        if (correction != 0.0f) {
+            steer_yaw = Clamp(yaw - correction, -twist_limit, twist_limit);
             At<float>(torso, kTorsoYaw) = steer_yaw;
             // Keep the twist-rate learning to the torso's own motion.
             g.yaw.last_angle += steer_yaw - yaw;
         }
     } else {
+        g.predicted = 0.0f;
         // Only with [aim] auto_center=1 (otherwise the drive step ran with
         // auto-centering off and the yaw command is 0 here; explicit Center
         // commands returned above). Auto-centering turns the legs toward
@@ -346,7 +407,7 @@ void AimAfterDrive(char* self, double now) {
                 "rate=%.2f,%.2f limit=%.4f,%.4f heading=%+.4f world=%+.4f gyro=%d\n",
                 now, dx, dy, g.yaw.target, g.pitch.target, yaw, pitch, yaw_cmd, pitch_cmd,
                 g.yaw.rate, g.pitch.rate, twist_limit, pitch_limit, g.heading,
-                WrapAngle(g.heading + steer_yaw), gyro ? 1 : 0);
+                WrapAngle(g.heading + yaw), gyro ? 1 : 0);
         }
     }
 }

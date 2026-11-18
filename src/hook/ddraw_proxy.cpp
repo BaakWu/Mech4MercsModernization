@@ -1923,12 +1923,35 @@ HRESULT WINAPI Hook_DDQueryInterface(void* self, REFIID iid, void** out) {
     return result;
 }
 
+// The IDirectDraw7 vtable is shared by every DirectDraw object, but the hooks
+// written into it do not stay there: by the time GameOS creates its next
+// DirectDraw object (display rebuild, resolution change, mission start) the
+// slots hold the original functions again. Every DirectDraw object is
+// therefore checked, and the hooks re-applied when they are gone; otherwise
+// the mission device never gets the Clear and depth-buffer fixes (per-frame
+// display rebuild and see-through terrain come back).
 void PatchDirectDrawVtable(IDirectDraw7* ddraw) {
-    if (!ddraw || g_original_dd_vtable[6]) {
+    if (!ddraw) {
         return;
     }
     auto* vtable = *reinterpret_cast<void***>(ddraw);
     if (!vtable) {
+        return;
+    }
+    if (g_original_dd_vtable[6]) {
+        if (vtable[0] == reinterpret_cast<void*>(&Hook_DDQueryInterface)) {
+            return;
+        }
+        const bool ok = PatchSlot(vtable, 0, reinterpret_cast<void*>(&Hook_DDQueryInterface)) &&
+                        PatchSlot(vtable, 6, reinterpret_cast<void*>(&Hook_CreateSurface)) &&
+                        PatchSlot(vtable, 14, reinterpret_cast<void*>(&Hook_GetGDISurface)) &&
+                        PatchSlot(vtable, 23, reinterpret_cast<void*>(&Hook_GetAvailableVidMem));
+        static unsigned repatched = 0;
+        const unsigned n = ++repatched;
+        if ((n & (n - 1)) == 0) {
+            Log("DirectDraw vtable %p had lost its hooks; re-applied %s (time %u)\n", vtable,
+                ok ? "ok" : "FAILED", n);
+        }
         return;
     }
     memcpy(g_original_dd_vtable, vtable, sizeof(g_original_dd_vtable));

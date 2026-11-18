@@ -240,6 +240,19 @@ behaves the same):
   The proxy retries the failed request as standard D24S8 (or D24X8 if no
   stencil was asked for) and reports the created format back. `[display]
   zbuffer_fix=0` disables it.
+- **The hooks must be re-applied to every DirectDraw object** (2026-11-17).
+  The proxy patches the shared `IDirectDraw7` vtable (`QueryInterface`,
+  `CreateSurface`, `GetGDISurface`, `GetAvailableVidMem`). It used to patch
+  it once, for the first object. A trace showed the slots holding the
+  original functions again for every later `DirectDrawCreateEx` object (the
+  display rebuilds at a resolution change and at mission start). So the
+  mission device got none of the Direct3D fixes above, and the per-frame
+  rebuild and see-through terrain came back. Measured at 1920x1200 in Eaton -
+  Merc Alley: 13-15 fps with the hooks lost, 363 fps once
+  they were re-applied, with one `SetWindowPos` in place of the rebuild loop.
+  The proxy now checks each new object and re-applies the hooks when they
+  are gone. It logs `DirectDraw vtable ... had lost its hooks; re-applied`.
+  What puts the original vtable back has not been found.
 - The Direct3D 7 runtime gives each device its own vtable copy and can switch
   a device to another copy; the production hooks only rely on the `Clear`
   slot (verified to stay hooked on the mission device). The development trace
@@ -373,6 +386,12 @@ step (which computes the torso keys and auto-centering), the hook:
 - steers the torso (`+0x2E4` yaw, `+0x2E0` pitch) with
   `clamp((target - angle) / (rate × τ), ±1)`. That is full rate while far
   away, then proportional, so there is no overshoot. τ = max(2 frames, 60 ms).
+  Within 0.0005 rad of the aim point (under a pixel) the command is exactly
+  0 (issue #32). The proportional tail never reaches 0 by itself, and the
+  game starts the torso twist sound (`sfx_torso.wav`, controller event
+  `0x17`) for any yaw command other than exactly 0.0 (`0x0054E0AA`), while
+  it only moves the torso for |command| ≥ 0.0001 (`0x0081851C`). The
+  leftover command kept the sound playing with the torso standing still.
   `rate` is learned per axis from the torso's response (the measured twist
   rate was 0.78 rad/s and pitch 0.64 rad/s on the test mech), which also
   absorbs the game's zoom speed modifiers.
@@ -421,6 +440,17 @@ its direction in the world:
   (`torso+0x19C`, clamped to the twist limit), and the aim point moves with
   it. So the torso holds its world direction like a gyro-stabilized turret,
   however fast the legs turn.
+- The legs turn in the frame's update after the drive step, and the frame
+  is drawn after that. Taking off only the turn measured since the last
+  step (1.7.1 and earlier) drew the aim one frame of leg turn off. That
+  amount changes with each frame's length, so the view shook while A/D was
+  held (issue #33): over a 0.8 s turn the drawn aim slid 0.032 rad and a
+  56 ms frame threw it 0.013 rad. Now this frame's turn is predicted and
+  taken off in the same step, plus whatever the last prediction missed.
+  The legs turn by rate × their turn command (controller `+0x2DC`, set by
+  A/D and the Center Legs commands) × the frame time; the rate is learned
+  from the last frame (0.957 rad/s on the test Archer, the same at every
+  command and frame time).
 - At the twist limit the aim point stops and the torso is carried with the
   legs. With Gyro Aim on, this also replaces the auto-centering compensation
   above.
@@ -447,6 +477,18 @@ Verified (Instant Action, holding the turn keys, a mech with an 80° limit):
   exactly.
 - Switched Off in the menu: saved as `gyro=0`, and the aim turned with the
   legs as in the stock game.
+
+Verified with the prediction (2026-11-17, Instant Action, Eaton - Merc
+Alley, Archer, about 24 fps), measuring the torso's world direction in each
+drawn frame:
+
+- A and D held 0.8 s, and 150 ms taps: the drawn aim did not change at all
+  (0.00000 rad spread). Only the first turn after the mission starts, before
+  the rate is learned, showed one 0.008 rad step on its first frame.
+- A held 2.5 s: the aim held exactly until the twist limit, then was carried
+  with the legs at their turn rate, with no jitter.
+- After a mouse flick the yaw command settled to exactly 0 (it stayed at a
+  tiny non-zero value before the issue #32 fix).
 
 Applies only with the mouse on and Mouse X Axis = Torso (the MW5 layout sets
 both). Otherwise, or with `track_pointer=0`, the stock code runs unchanged.
