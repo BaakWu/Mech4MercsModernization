@@ -49,11 +49,45 @@ void __fastcall Hook_SetMissionPath(void* game, void* /*edx*/, const char* path)
     g_own_script = use != path;  // the next mission load keeps the mission's own script
     Log("coop: SetMissionPath \"%s\" from %p (%s)%s%s\n", path ? path : "(null)", ret,
         network ? "network start" : "other", use != path ? " -> " : "", use != path ? use : "");
+    g_set_path(game, use);
+    // After the path is set (the setup below looks the mission up by it).
+    if (g_own_script && Campaign()) {
+        // A co-op host's campaign: run the campaign launch's mission setup
+        // (shell method 0x00511260, called by the campaign start 0x0052B220
+        // with 0): the campaign's begin-mission (0x00624CA0), the mission
+        // record's data and the drop fee. Without it the mission end reads a
+        // garbage size from the record ("Invalid allocation").
+        static const unsigned char kPrologue[] = {0x6A, 0xFF, 0x68, 0x8F, 0x60, 0x76, 0x00,
+                                                  0x64, 0xA1, 0x00, 0x00, 0x00, 0x00};
+        void* setup = reinterpret_cast<void*>(0x00511260);
+        void* shell = *reinterpret_cast<void**>(0x0103D850);
+        if (shell && memcmp(setup, kPrologue, sizeof(kPrologue)) == 0) {
+            using CampaignSetup_t = void(__thiscall*)(void* shell, int arg);
+            // The setup looks the mission up by the shell's selected mission
+            // name (shell+0x40970, a game string; the lobby set it to its map).
+            // Give it the co-op mission's name for the call: a string built
+            // by the game's own constructor (0x00417D90) and destroyed by its
+            // destructor (0x004149D0).
+            using StrCtor_t = void(__thiscall*)(void** self, const char* text);
+            using StrDtor_t = void(__thiscall*)(void** self);
+            void* name = nullptr;
+            reinterpret_cast<StrCtor_t>(0x00417D90)(&name, g_mission);
+            void** slot = reinterpret_cast<void**>(static_cast<unsigned char*>(shell) + 0x40970);
+            void* saved = *slot;
+            *slot = name;
+            Log("coop: campaign mission setup (0x00511260) for \"%s\" ...\n", g_mission);
+            reinterpret_cast<CampaignSetup_t>(setup)(shell, 0);
+            Log("coop: campaign mission setup done\n");
+            *slot = saved;
+            reinterpret_cast<StrDtor_t>(0x004149D0)(&name);
+        } else {
+            Log("coop: campaign mission setup skipped (no shell or bytes differ)\n");
+        }
+    }
     Log("coop: campaign %p, shell mode %d\n", Campaign(),
         *reinterpret_cast<unsigned char**>(0x0103D850)
             ? *reinterpret_cast<int*>(*reinterpret_cast<unsigned char**>(0x0103D850) + 0x24)
             : -99);
-    g_set_path(game, use);
 }
 
 // Mission load (3.1c 0x006099B0) picks the mission's controller script. The
@@ -132,9 +166,29 @@ void InstallKeepCampaign() {
     if (!site) {
         return;
     }
-    const unsigned char jmp = 0xEB;
-    const bool ok = WriteCode(site + 32, &jmp, 1);
-    Log("coop: network screens keep the campaign: %s\n", ok ? "patched" : "FAILED");
+    // The teardown that follows deletes every single-player object: globals
+    // +0x44 (campaign), +0x30, +0x3C, +0x34, +0x38 and the campaign's mission
+    // state at 0x011D4840..0x011D484C. Jump from its start (site+6) to the
+    // function's end: pop esi; mov eax,1; pop ebx; ret.
+    unsigned char* start = site + 6;
+    unsigned char* end = nullptr;
+    static const unsigned char kEnd[] = {0x5E, 0xB8, 0x01, 0x00, 0x00, 0x00, 0x5B, 0xC3};
+    for (unsigned char* p = start; p < start + 0x200; ++p) {
+        if (memcmp(p, kEnd, sizeof(kEnd)) == 0) {
+            end = p;
+            break;
+        }
+    }
+    if (!end) {
+        Log("coop: network screens keep the campaign: end not found\n");
+        return;
+    }
+    unsigned char code[5] = {0xE9};
+    const int rel = static_cast<int>(end - (start + 5));
+    memcpy(code + 1, &rel, 4);
+    const bool ok = WriteCode(start, code, sizeof(code));
+    Log("coop: network screens keep the single-player state (%p -> %p): %s\n", start, end,
+        ok ? "patched" : "FAILED");
 }
 
 void InstallAiGate() {
@@ -306,6 +360,23 @@ void LogStackFrom(const char* what, void** sp) {
 
 volatile LONG g_watch_hits = 0;
 
+// gos_Free (3.1c 0x006FAC90, stdcall, 1 argument): log frees of the
+// campaign's mission state ([campaign+0x34]) and its current mission record
+// ([that+0x48]) with the caller's stack.
+using Free_t = void(__stdcall*)(void* p);
+Free_t g_free = nullptr;
+void* volatile g_watch_free[2] = {};
+
+void __stdcall Hook_Free(void* p) {
+    if (p && (p == g_watch_free[0] || p == g_watch_free[1])) {
+        char what[96];
+        sprintf_s(what, "freed %s %p", p == g_watch_free[0] ? "campaign+0x34 object"
+                                                            : "mission record", p);
+        LogStackFrom(what, reinterpret_cast<void**>(_AddressOfReturnAddress()));
+    }
+    g_free(p);
+}
+
 LONG CALLBACK CoopExceptionLog(EXCEPTION_POINTERS* info) {
     const DWORD code = info->ExceptionRecord->ExceptionCode;
     if (code == EXCEPTION_SINGLE_STEP && (info->ContextRecord->Dr6 & 1)) {
@@ -316,6 +387,32 @@ LONG CALLBACK CoopExceptionLog(EXCEPTION_POINTERS* info) {
             char what[96];
             sprintf_s(what, "campaign slot written before %08lX -> %p",
                       static_cast<unsigned long>(info->ContextRecord->Eip), Campaign());
+            LogStackFrom(what, reinterpret_cast<void**>(info->ContextRecord->Esp));
+        }
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (code == EXCEPTION_SINGLE_STEP && (info->ContextRecord->Dr6 & 4)) {
+        info->ContextRecord->Dr6 = 0;
+        static volatile LONG hits = 0;
+        if (InterlockedIncrement(&hits) <= 20) {
+            char what[128];
+            sprintf_s(what, "campaign+0x34 = %08X before %08lX",
+                      *reinterpret_cast<const unsigned*>(info->ContextRecord->Dr2),
+                      static_cast<unsigned long>(info->ContextRecord->Eip));
+            LogStackFrom(what, reinterpret_cast<void**>(info->ContextRecord->Esp));
+        }
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (code == EXCEPTION_SINGLE_STEP && (info->ContextRecord->Dr6 & 2)) {
+        // DR1: the game's flag dword +0x14..+0x17 (+0x15 stop request,
+        // +0x16, +0x17 networked).
+        info->ContextRecord->Dr6 = 0;
+        static volatile LONG hits = 0;
+        if (InterlockedIncrement(&hits) <= 30) {
+            const unsigned char* f = reinterpret_cast<const unsigned char*>(info->ContextRecord->Dr1);
+            char what[128];
+            sprintf_s(what, "game flags +14..17 = %02X %02X %02X %02X before %08lX", f[0], f[1],
+                      f[2], f[3], static_cast<unsigned long>(info->ContextRecord->Eip));
             LogStackFrom(what, reinterpret_cast<void**>(info->ContextRecord->Esp));
         }
         return EXCEPTION_CONTINUE_EXECUTION;
@@ -353,8 +450,13 @@ bool ArmCampaignBreakpoint() {
     if (!holder) {
         return false;
     }
-    const uintptr_t slot = (*reinterpret_cast<uintptr_t*>(holder) ^
-                            *reinterpret_cast<uintptr_t*>(0x0103B0B8)) + 0x44;
+    const uintptr_t globals =
+        *reinterpret_cast<uintptr_t*>(holder) ^ *reinterpret_cast<uintptr_t*>(0x0103B0B8);
+    const uintptr_t slot = globals + 0x44;
+    const uintptr_t game = *reinterpret_cast<uintptr_t*>(globals + 0x0C) ^ 0x85739531u;
+    if (!game) {
+        return false;
+    }
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snap == INVALID_HANDLE_VALUE) {
         return false;
@@ -376,7 +478,10 @@ bool ArmCampaignBreakpoint() {
             ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
             if (GetThreadContext(t, &ctx)) {
                 ctx.Dr0 = slot;
-                ctx.Dr7 = (ctx.Dr7 & ~0x000F0003u) | 1u | (1u << 16) | (3u << 18);  // L0, write, 4 bytes
+                ctx.Dr1 = game + 0x14;
+                // L0 + L1, both write, 4 bytes.
+                ctx.Dr7 = (ctx.Dr7 & ~0x00FF000Fu) | 1u | 4u | (1u << 16) | (3u << 18) |
+                          (1u << 20) | (3u << 22);
                 if (SetThreadContext(t, &ctx)) {
                     ++armed;
                 }
@@ -386,12 +491,50 @@ bool ArmCampaignBreakpoint() {
         CloseHandle(t);
     }
     CloseHandle(snap);
-    Log("coop: campaign slot %08X watched in %d threads\n", static_cast<unsigned>(slot), armed);
+    Log("coop: campaign slot %08X and game flags %08X watched in %d threads\n",
+        static_cast<unsigned>(slot), static_cast<unsigned>(game + 0x14), armed);
     return armed > 0;
+}
+
+// DR2 on one more address (write, 4 bytes) in every other thread.
+int ArmWatch2(uintptr_t addr) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    int armed = 0;
+    THREADENTRY32 te{sizeof(te)};
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != GetCurrentProcessId() ||
+            te.th32ThreadID == GetCurrentThreadId()) {
+            continue;
+        }
+        HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME,
+                              FALSE, te.th32ThreadID);
+        if (!t) {
+            continue;
+        }
+        if (SuspendThread(t) != static_cast<DWORD>(-1)) {
+            CONTEXT ctx{};
+            ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            if (GetThreadContext(t, &ctx)) {
+                ctx.Dr2 = addr;
+                ctx.Dr7 = (ctx.Dr7 & ~0x0F000030u) | 0x10u | (1u << 24) | (3u << 26);
+                if (SetThreadContext(t, &ctx)) {
+                    ++armed;
+                }
+            }
+            ResumeThread(t);
+        }
+        CloseHandle(t);
+    }
+    CloseHandle(snap);
+    return armed;
 }
 
 DWORD WINAPI CampaignWatch(LPVOID) {
     bool armed = false;
+    uintptr_t watched_record = 0;
     void* last_campaign = reinterpret_cast<void*>(1);
     int last_mode = -100;
     uintptr_t last_loop = 1;
@@ -439,8 +582,30 @@ DWORD WINAPI CampaignWatch(LPVOID) {
         unsigned char* shell = *reinterpret_cast<unsigned char**>(0x0103D850);
         const int mode = shell ? *reinterpret_cast<int*>(shell + 0x24) : -99;
         const uintptr_t loop = *reinterpret_cast<uintptr_t*>(0x01240974);
-        if (campaign && !armed) {
+        if (!armed && *reinterpret_cast<uintptr_t*>(0x01240974) == 0x0052B940) {  // menus up
             armed = ArmCampaignBreakpoint();
+        }
+        // The campaign's mission state pointer, campaign+0x34 (its +0x48 is
+        // the current mission record).
+        if (campaign) {
+            const uintptr_t sub = reinterpret_cast<uintptr_t>(campaign) + 0x34;
+            if (sub != watched_record) {
+                watched_record = sub;
+                const int n = ArmWatch2(watched_record);
+                Log("coop: campaign+0x34 at %08X (now %08X) watched in %d threads\n",
+                    static_cast<unsigned>(watched_record),
+                    *reinterpret_cast<unsigned*>(watched_record), n);
+            }
+            const uintptr_t obj = *reinterpret_cast<uintptr_t*>(sub);
+            if (obj && !IsBadReadPtr(reinterpret_cast<void*>(obj + 0x48), 4)) {
+                void* record = *reinterpret_cast<void**>(obj + 0x48);
+                if (g_watch_free[0] != reinterpret_cast<void*>(obj) ||
+                    g_watch_free[1] != record) {
+                    g_watch_free[0] = reinterpret_cast<void*>(obj);
+                    g_watch_free[1] = record;
+                    Log("coop: watching frees of %p and record %p\n", g_watch_free[0], record);
+                }
+            }
         }
         if (campaign != last_campaign || mode != last_mode || loop != last_loop) {
             Log("coop: watch campaign %p, shell mode %d, loop %08X\n", campaign, mode,
@@ -458,6 +623,18 @@ void InstallEndTrace() {
     }
     AddVectoredExceptionHandler(1, CoopExceptionLog);
     g_exit_log.armed = true;
+    {
+        // push ebp; mov ebp,esp; sub esp,8; push ebx; mov ebx,[ebp+8]; push esi; push edi;
+        // test ebx,ebx; je
+        unsigned char* f = reinterpret_cast<unsigned char*>(0x006FAC90);
+        static const unsigned char kFree[] = {0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08, 0x53,
+                                              0x8B, 0x5D, 0x08, 0x56, 0x57, 0x85, 0xDB};
+        if (memcmp(f, kFree, sizeof(kFree)) == 0) {
+            InstallDetour(f, 6, reinterpret_cast<void*>(&Hook_Free),
+                          reinterpret_cast<void**>(&g_free));
+        }
+        Log("coop: free trace %s\n", g_free ? "ok" : "skipped");
+    }
     InstallStateTrace();
     // push esi; mov esi,ecx; mov al,[esi+21E8h]; test al,al; jne; lea ecx,[esi+21BCh]
     unsigned char* delay = FindUnique("mission_end_delay",
