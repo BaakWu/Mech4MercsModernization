@@ -1,5 +1,23 @@
 # MechWarrior 4 Mercenaries Modernization Patch
 
+> I DON'T GIVE A F\*\*\* ABOUT THE F\*\*\*ING CODE! I just want to download this
+> stupid patch and stomp around in my Atlas. WHY IS THERE CODE??? MAKE A
+> F\*\*\*ING .EXE FILE AND GIVE IT TO ME. These techs think every pilot is a
+> developer and understands code. Well I am not, I'm a MechWarrior. I only know
+> how to download, install and alpha strike. SO WHY IS THERE CODE? Make an EXE
+> file and give it to me. STUPID SMELLY TECHS.
+>
+> — a MechWarrior, probably
+
+**You don't need the code.** Here's your .exe:
+
+1. Open the [latest release](https://github.com/BaakWu/Mech4MercsModernization/releases/latest).
+2. Download `MW4Mercs-ModernizationPatch-Setup-<version>.exe` under **Assets**.
+3. Run it, check that it found your game folder, and click **Install**. Then
+   start the game as usual.
+
+---
+
 An independent patch for **MechWarrior 4: Mercenaries 3.1c**
 (`51.03.01.0030`).
 
