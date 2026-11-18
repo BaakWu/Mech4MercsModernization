@@ -9,7 +9,7 @@
 >
 > — a MechWarrior, probably
 
-**You don't need the code.** Here's your .exe:
+**Here's your .exe:** 
 
 1. Open the [latest release](https://github.com/BaakWu/Mech4MercsModernization/releases/latest).
 2. Download `MW4Mercs-ModernizationPatch-Setup-<version>.exe` under **Assets**.
