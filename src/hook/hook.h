@@ -70,6 +70,8 @@ struct Config {
     bool checkbox_enabled = true;
     bool debug_dump_image = false;
     bool debug_automation = false;
+    bool debug_coop_trace = false;     // [debug] coop_trace: log mission starts (#16 recon)
+    wchar_t debug_coop_mission[64] = {};  // [debug] coop_mission: network start loads this mission
     bool controls_mw5 = false;  // [controls] mw5: MW5-style driving (opt-in)
     bool throttle_decay = false;  // [controls] decay: initial Throttle Decay setting
     bool aim_track_pointer = false;  // [aim] track_pointer: mouse moves an aim point (opt-in)
@@ -107,6 +109,8 @@ bool GyroAimEnabled();
 
 // Full company in campaign missions (campaign.cpp, issue #21).
 bool InstallCampaignHooks();
+// Campaign co-op recon (coop.cpp, issue #16; debug only).
+bool InstallCoopHooks();
 
 // Sharper HUD images (hudtex.cpp, issue #27): the archive member hook passes
 // each fetched entry; textures\hud\*.tga are replaced by a 4x copy.

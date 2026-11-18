@@ -21,6 +21,8 @@
 //   wait  <ms>
 //   shot  <file.bmp>    ask the ddraw proxy to save the next presented frame
 //   log   <text>
+//   release             hand the mouse and keyboard back to the real devices
+//                       (stops the virtual cursor and injected state)
 //
 // Nothing here is active unless automation is enabled in mw4hook.ini.
 #include "hook.h"
@@ -91,6 +93,14 @@ void Execute(const std::string& line) {
     if (sscanf_s(line.c_str(), "%15s %259[^\r\n]", verb,
                  static_cast<unsigned>(sizeof(verb)), rest,
                  static_cast<unsigned>(sizeof(rest))) < 1) {
+        return;
+    }
+    if (_stricmp(verb, "release") == 0) {
+        // Stop replacing the real mouse/keyboard so a person can take over.
+        g_active = false;
+        g_button_until = 0;
+        g_key_until = 0;
+        Log("auto: release\n");
         return;
     }
     g_active = true;

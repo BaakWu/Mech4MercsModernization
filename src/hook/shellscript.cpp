@@ -754,6 +754,13 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         SharpenHudImage(entry, archive);
         const char* name = reinterpret_cast<char*>(entry + kEntryName);
         const size_t len = entry[kEntryNameLen];
+        if (GetConfig().debug_coop_trace && EndsWithI(name, len, ".abl")) {
+            static int logged = 0;  // issue #16 recon: which mission scripts load
+            if (logged < 300) {
+                ++logged;
+                Log("coop: script %.*s\n", static_cast<int>(len), name);
+            }
+        }
         const bool video = len == sizeof(kTargetName) - 1 && _stricmp(name, kTargetName) == 0;
         const bool game = len == sizeof(kGameTarget) - 1 && _stricmp(name, kGameTarget) == 0;
         const bool join = len == sizeof(kJoinTarget) - 1 && _stricmp(name, kJoinTarget) == 0;

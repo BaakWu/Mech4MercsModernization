@@ -33,6 +33,7 @@ $sources = @(
     'camo.cpp',
     'sound.cpp',
     'campaign.cpp',
+    'coop.cpp',
     'hudtex.cpp',
     'cursor.cpp',
     'detour.cpp',
