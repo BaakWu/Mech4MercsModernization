@@ -83,6 +83,8 @@ struct Config {
     bool menu_badge = true;         // [frontend] badge: Main Menu patch badge (#24)
     bool hud_names = true;          // [hud] names: roster names from the MicroStyle font
     bool sound_background = true;  // [sound] background: keep playing when unfocused (#26)
+    bool input_controllers = true;    // [input] controllers: open game controllers (#34)
+    bool input_other_devices = false;  // [input] other_devices: also non-controller HID devices (#34)
     // [mechlab] default_camo: a new pilot's default camouflage code (the first
     // character of MekTek's camouflage name; '_' = None; empty = template's).
     char default_camo = '_';

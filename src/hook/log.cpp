@@ -73,6 +73,9 @@ void LoadConfig() {
     g_config.menu_badge = GetPrivateProfileIntW(L"frontend", L"badge", 1, path) != 0;
     g_config.hud_names = GetPrivateProfileIntW(L"hud", L"names", 1, path) != 0;
     g_config.sound_background = GetPrivateProfileIntW(L"sound", L"background", 1, path) != 0;
+    g_config.input_controllers = GetPrivateProfileIntW(L"input", L"controllers", 1, path) != 0;
+    g_config.input_other_devices =
+        GetPrivateProfileIntW(L"input", L"other_devices", 0, path) != 0;
     // "None" (or "_") = no camouflage; otherwise the camouflage's code, the
     // first character of its MechLab name (e.g. "a" for "a-Snow - SnowBall").
     wchar_t camo[64] = {};

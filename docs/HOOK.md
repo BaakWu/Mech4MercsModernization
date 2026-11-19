@@ -215,6 +215,41 @@ it, and logs `sound: CreateSoundBuffer lost the buffer; N retries`. Not yet
 verified against a real recurrence. Applies only while `[sound] background`
 is on, since that installs the hook.
 
+### Input devices at startup (`[input]`; issue #34)
+
+At startup the game enumerates every attached DirectInput device
+(`EnumDevices`, all types, attached only; 3.1c `0x00720F60`) and opens each
+one that is not a mouse or keyboard with `CreateDeviceEx` (callback
+`0x00720FA0`; a device it cannot open is skipped). Opening a HID device makes
+Windows' DirectInput build the device's object list. On one player's PC
+that crashed the game before the window showed anything: an access violation
+in `dinput.dll` 10.0.26100.8115 at `CHid_InitAxisClass+0x63E` (offset
+`0x12941`, named with Microsoft's public symbols). That function appends one
+0x74-byte axis entry per input value without checking the count the table
+was allocated for (`CHid_AllocObjectMemory`), so a device whose HID
+description doesn't match that count writes past the heap block. The stock
+game does the same; the crash is not in the patch's code.
+
+The game only uses joysticks, gamepads and wheels (`DIDEVTYPE_JOYSTICK`), but
+it also opened everything DirectInput lists as `DIDEVTYPE_DEVICE`: lighting
+controllers, headset and media keys, microphones, touchpads and the extra
+HID collections of gaming keyboards and mice (the dev PC lists over 30). The
+`dinput.dll` proxy now always wraps `IDirectInput::EnumDevices` (vtable slot
+4), `CreateDevice` (3) and `IDirectInput7::CreateDeviceEx` (9):
+
+- devices of type `DIDEVTYPE_DEVICE` are not offered to the game
+  (`[input] other_devices=1` restores the stock behaviour);
+- `[input] controllers=0` leaves only the system keyboard and mouse;
+- every device is logged once with its type and whether it was offered
+  (`dinput: device "Razer Spectre" (other device, type 00010001) not offered
+  to the game`);
+- opening a controller is logged before and after, and runs under a guard: if
+  DirectInput faults inside it, the device is logged (`opening "..." crashed
+  DirectInput`) and the open fails like an unplugged device, so the game
+  starts without it. The fault means DirectInput already wrote past its
+  table, so this is a last resort, not a guarantee; the log names the device
+  to unplug or the setting to use.
+
 ### Direct3D: per-frame display rebuild, depth buffer
 
 Found 2026-11-16 by A/B with all display features disabled (the stock game
@@ -858,6 +893,9 @@ sharp=1       ; sharper HUD text images (2-4x, by resolution)
 names=1       ; roster 'Mech names redrawn from the MicroStyle font
 [sound]
 background=1  ; keep the audio playing when the window is not focused
+[input]
+controllers=1   ; (default, not in the shipped ini) open joysticks, gamepads, wheels
+other_devices=0 ; (default, not in the shipped ini) also offer other HID devices (stock)
 [frontend]
 stretch=1     ; scale the picture into the window
 badge=1       ; Main Menu "MODERNIZED / PATCH vX.Y.Z" badge (bottom left)
