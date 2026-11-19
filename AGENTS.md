@@ -15,7 +15,11 @@ Rebirth. The product is a runtime patch that:
 - fixes modern-Windows display and input defects
 - keeps MekTek AntiHack intact
 - is reversible: removing its files restores the stock game
-- changes no game file on disk and does not redistribute game files
+- changes no game file on disk and does not redistribute game files.
+  One owner-approved exception (2026-11-19, issue #35): the installer sets
+  the game's old `Assets\Binaries\imagehlp.dll` aside (renamed to
+  `imagehlp.dll.mw4patch-disabled`) because it breaks NVIDIA's DirectDraw
+  hardware path, and uninstall renames it back.
 - only acts on the supported build (every patch site is found by a unique
   byte pattern; anything else leaves the game untouched)
 

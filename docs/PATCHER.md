@@ -78,7 +78,17 @@ On install it:
    company choice, and `decay` carried over from an existing install),
 7. creates `MechWarrior 4 Mercenaries (Windowed).lnk` and updates the existing
    `Shortcut to MW4Mercs.exe.lnk` to use `-window`,
-8. writes `mw4patch-install.ini` with installed hashes and backup names.
+8. sets the game's `Assets\Binaries\imagehlp.dll` (2003) aside as
+   `imagehlp.dll.mw4patch-disabled` (issue #35: Windows finds it on the
+   game's DLL search path and it stops NVIDIA's DirectDraw hardware path,
+   giving the "Hardware Error"); a failure here is only a warning,
+9. writes `mw4patch-install.ini` with installed hashes, backup names and
+   `aside.imagehlp.dll`.
+
+Uninstall renames `imagehlp.dll.mw4patch-disabled` back to `imagehlp.dll`
+(the 3.1c original, SHA-256 `8b437274...`), so the folder matches the full
+manifest again. This is the only game file the patch touches (owner decision
+2026-11-19).
 
 The game executable is never modified. The proxy makes the `-window` switch
 follow the Windowed setting: a raw `MW4Mercs.exe` launch is relaunched with

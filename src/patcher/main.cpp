@@ -44,6 +44,12 @@ constexpr const wchar_t* kDdrawName = L"ddraw.dll";
 constexpr const wchar_t* kDdrawBackup = L"ddraw.dll.mw4patch-backup";
 constexpr const wchar_t* kIniName = L"mw4hook.ini";
 constexpr const wchar_t* kIniBackup = L"mw4hook.ini.mw4patch-backup";
+// The game's own imagehlp.dll (2003) stops NVIDIA's DirectDraw hardware path
+// ("Hardware Error", #35). Windows finds it on the game's DLL search path, so
+// it is set aside on install and put back on uninstall (owner decision
+// 2026-11-19; the only game file the patch touches).
+constexpr const wchar_t* kImagehlpName = L"Assets\\Binaries\\imagehlp.dll";
+constexpr const wchar_t* kImagehlpAside = L"Assets\\Binaries\\imagehlp.dll.mw4patch-disabled";
 constexpr const wchar_t* kShortcutName =
     L"MechWarrior 4 Mercenaries (Windowed).lnk";
 constexpr const wchar_t* kExistingShortcutName =
@@ -741,10 +747,51 @@ struct RollbackState {
     bool ddrawBackup = false;
     bool iniBackup = false;
     bool existingShortcutBackup = false;
+    bool imagehlpSetAside = false;
 };
+
+// Sets the game's imagehlp.dll aside (see kImagehlpName). Returns true when
+// it is aside now (moved now, or by an earlier install).
+bool SetAsideImagehlp(const std::wstring& install, bool* moved_now) {
+    *moved_now = false;
+    const std::wstring path = Join(install, kImagehlpName);
+    const std::wstring aside = Join(install, kImagehlpAside);
+    if (!FileExists(path)) {
+        return FileExists(aside);
+    }
+    if (FileExists(aside)) {
+        // Set aside before and restored since (e.g. by hand): keep the copy
+        // already aside and remove this one only if it is identical.
+        std::string a, b;
+        if (Sha256File(path, a) && Sha256File(aside, b) && a == b &&
+            DeleteFileW(path.c_str())) {
+            *moved_now = true;
+            return true;
+        }
+        return false;
+    }
+    if (!MoveFileExW(path.c_str(), aside.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        return false;
+    }
+    *moved_now = true;
+    return true;
+}
+
+// Puts it back (uninstall, rollback).
+bool RestoreImagehlp(const std::wstring& install) {
+    const std::wstring path = Join(install, kImagehlpName);
+    const std::wstring aside = Join(install, kImagehlpAside);
+    if (!FileExists(aside) || FileExists(path)) {
+        return false;
+    }
+    return MoveFileExW(aside.c_str(), path.c_str(), MOVEFILE_WRITE_THROUGH) != FALSE;
+}
 
 void Rollback(const std::wstring& install, const RollbackState& state) {
     Print(L"Rolling back...\n");
+    if (state.imagehlpSetAside) {
+        RestoreImagehlp(install);
+    }
     if (state.recordWritten) {
         DeleteFileW(Join(install, kRecordName).c_str());
     }
@@ -1014,6 +1061,10 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1, in
     Print(L"  - install %ls (%hs)\n", kHookName, dinputHash.c_str());
     Print(L"  - install %ls (%hs)\n", kDdrawName, ddrawHash.c_str());
     Print(L"  - install %ls\n", kIniName);
+    if (FileExists(Join(install, kImagehlpName))) {
+        Print(L"  - set aside %ls (NVIDIA Hardware Error; restored on uninstall)\n",
+              kImagehlpName);
+    }
     Print(L"  - create %ls\n", kShortcutName);
     if (backupOptions || backupDinput || backupDdraw || backupIni) {
         Print(L"  - backups:");
@@ -1138,8 +1189,22 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1, in
         }
     }
 
+    // The game's old imagehlp.dll (NVIDIA "Hardware Error", #35). A failure
+    // is only a warning: the hook still refuses the game's own load of it.
+    bool imagehlpMoved = false;
+    const bool imagehlpAside = SetAsideImagehlp(install, &imagehlpMoved);
+    state.imagehlpSetAside = imagehlpMoved;
+    if (imagehlpMoved) {
+        Print(L"Set aside %ls (restored on uninstall)\n", kImagehlpName);
+    } else if (!imagehlpAside && FileExists(Join(install, kImagehlpName))) {
+        PrintError(L"warning: could not set aside %ls\n", kImagehlpName);
+    }
+
     std::map<std::string, std::string> record;
     record["tool_version"] = WideToUtf8(kToolVersion);
+    if (imagehlpAside) {
+        record["aside.imagehlp.dll"] = WideToUtf8(kImagehlpAside);
+    }
     record["installed_utc"] = WideToUtf8(IsoUtcNow());
     record["install_path"] = WideToUtf8(install);
     record["target_sha256"] = kExpectedExeSha256;
@@ -1311,6 +1376,10 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
     DeleteFileW(Join(install, L"mw4hook-pilots.ini").c_str());
     // Input devices the game closed on (issue #34).
     DeleteFileW(Join(install, L"mw4hook-input.ini").c_str());
+    // The game's imagehlp.dll, set aside on install (#35).
+    if (RestoreImagehlp(install)) {
+        Print(L"Restored %ls\n", kImagehlpName);
+    }
     // Hook log files.
     WIN32_FIND_DATAW found{};
     HANDLE find = FindFirstFileW(Join(install, L"mw4hook-*.log").c_str(), &found);
@@ -1887,8 +1956,8 @@ void CreateControls(const std::wstring& initial_dir, bool initial_mw5, bool init
         std::wstring(L"MechWarrior 4 Mercenaries Modernization Patch (") + kToolVersion + L")";
     Child(L"STATIC", title.c_str(), 0, 16, 14, 580, 26, 0, g_title_font);
     Child(L"STATIC",
-          L"For MechWarrior 4: Mercenaries 3.1c (MekTek). No game file is changed; uninstall "
-          L"puts everything back.",
+          L"For MechWarrior 4: Mercenaries 3.1c (MekTek). Only the game's old imagehlp.dll "
+          L"is set aside; uninstall puts everything back.",
           0, 16, 44, 580, 20, 0);
 
     Child(L"STATIC", L"Game folder (contains MW4Mercs.exe):", 0, 16, 76, 400, 18, 0);

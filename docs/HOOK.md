@@ -252,6 +252,14 @@ in-process through GameOS' own import slot (the game's copy refused with
 error 126, Windows' copy loaded); the dev PC's AMD path never reaches that
 setup, so the NVIDIA result rests on the player's rename test.
 
+**1.7.5 did not fix it; 1.7.6 sets the file aside.** Refusing GameOS' own
+full-path load was not enough on the NVIDIA PC: GameOS also puts
+`assets\binaries` on the game's DLL search path, so a load of `imagehlp.dll`
+by name (as a driver or any module does) still finds the old copy there. The
+installer now renames the file to `imagehlp.dll.mw4patch-disabled` and
+uninstall renames it back (`docs/PATCHER.md`); the hook's refusal stays as a
+second layer for installs where the file is back.
+
 **Texture memory test (skipped).** The hardware setup rejects a card whose
 local + AGP video memory (record `+0x10AC` + `+0x10B0`, from DirectDraw) is
 below the game's minimum of `0x1400` KB (5 MB, set at `0x0040B3BC`):

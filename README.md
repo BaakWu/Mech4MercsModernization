@@ -135,7 +135,10 @@ restart itself as administrator.
 The fix layer is loaded at runtime rather than rewriting `MW4Mercs.exe`. That
 avoids editing the code regions used by the multiplayer integrity check;
 whether the patch works with AntiHack and multiplayer has not been tested
-yet. No game file is changed. Uninstalling does not undo what the game saved
+yet. No game file is changed, except that the game's old
+`Assets\Binaries\imagehlp.dll` is set aside (renamed), because it stops NVIDIA
+graphics cards from working with the game; uninstalling puts it back.
+Uninstalling does not undo what the game saved
 while the patch was installed: pilots, campaign progress, key bindings and
 camouflage stay as they are, and `options.ini` goes back to
 the copy taken at install, so settings changed since then are lost.
