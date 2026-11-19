@@ -533,10 +533,11 @@ High-value files:
 - Identify the main-monitor/black-screen behavior.
 - Identify the second-video-card mipmap bug.
 - `imagehlp.dll`: the game's own `Assets\Binaries\imagehlp.dll` stops NVIDIA's
-  DirectDraw hardware path ("Hardware Error" on RTX 3090/5080, #35); the hook
-  refuses that one load so GameOS uses Windows' copy (`docs/HOOK.md`).
-  Awaiting confirmation from NVIDIA players. Whether it is also behind the
-  crashes in item 9 is still open.
+  DirectDraw hardware path ("Hardware Error" on RTX 3090/5080, #35). Fixed in
+  1.7.6, confirmed by an NVIDIA player: the installer sets the file aside
+  (uninstall restores it) and the hook refuses GameOS' full-path load
+  (`docs/HOOK.md`, `docs/PATCHER.md`). Whether it is also behind the crashes
+  in item 9 is still open.
 - Identify the menu message-dispatch crash.
 - Test the software renderer (renderer 3) now that its 16-bit fallback is
   raised to 32-bit.
