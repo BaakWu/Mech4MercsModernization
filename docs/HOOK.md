@@ -299,10 +299,43 @@ HID collections of gaming keyboards and mice (the dev PC lists over 30). The
   to the game`);
 - opening a controller is logged before and after, and runs under a guard: if
   DirectInput faults inside it, the device is logged (`opening "..." crashed
-  DirectInput`) and the open fails like an unplugged device, so the game
-  starts without it. The fault means DirectInput already wrote past its
-  table, so this is a last resort, not a guarantee; the log names the device
-  to unplug or the setting to use.
+  DirectInput`) and the open fails like an unplugged device. The fault means
+  DirectInput already wrote past its table, so this is a last resort.
+
+**Device-agnostic protection (after 1.7.3).** 1.7.3 still crashed for the same
+player, at `CHid_InitAxisClass+0xF6` (another write through a table pointer
+for a value cap), so the patch no longer depends on knowing which devices
+are bad. `input_probe.cpp`:
+
+1. **Probe.** Before the game's first enumeration, the hook runs
+   `rundll32.exe "<game>\dinput.dll",ProbeInputDevices <J|A><skip list>|<file>`
+   (32-bit rundll32, `CREATE_NO_WINDOW`; DllMain does nothing but resolve the
+   real DirectInput when the host is rundll32). The probe enumerates every
+   attached device, then for each device the game would be given (controllers;
+   all non-system devices with `other_devices=1`) creates it, sets the joystick
+   data format, the cooperative level (hidden window), acquires, polls and
+   reads it. It writes each step to the file before taking it; a crash is
+   recorded by its own unhandled-exception filter (`crash C0000005
+   dinput.dll+0x...`) and ends the process without Windows Error Reporting.
+   The hook keeps the device the probe stopped on from the game and runs
+   another round without it (up to 4 rounds, 6 s each), so the devices after
+   it are checked too. If the probe fails while listing the devices, the game
+   is given the keyboard and mouse only (listed by type, which does not walk
+   the HID devices). Measured: about 0.8-1 s per round (process start,
+   DirectInput, enumeration); 27 devices opened and read in 1.25 s.
+2. **Crash memory** (`mw4hook-input.ini` next to the game). Before the game
+   opens a controller it is written to `[opening]` and removed when the open
+   returns. An entry left there means the game closed during that open: at
+   the next start it moves to `[skip]` and the device is not offered again
+   (`input: the game closed while opening "..." last time; it is skipped from
+   now on`). Delete the file to try the device again. The file exists only
+   while there is something to remember; uninstall removes it. This also
+   covers machines where the probe cannot run.
+3. The guard above, and `[input] controllers=0`.
+
+Every decision is logged: `dinput: device "..." (controller, ...) not offered
+to the game: DirectInput failed opening it in the probe (C0000005
+dinput.dll+0x123F9)`.
 
 ### Direct3D: per-frame display rebuild, depth buffer
 

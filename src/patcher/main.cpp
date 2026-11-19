@@ -1309,6 +1309,8 @@ int CommandUninstall(const std::wstring& install, bool assumeYes) {
     }
     // The hook's per-pilot records (new pilots' pending setup, camouflage).
     DeleteFileW(Join(install, L"mw4hook-pilots.ini").c_str());
+    // Input devices the game closed on (issue #34).
+    DeleteFileW(Join(install, L"mw4hook-input.ini").c_str());
     // Hook log files.
     WIN32_FIND_DATAW found{};
     HANDLE find = FindFirstFileW(Join(install, L"mw4hook-*.log").c_str(), &found);

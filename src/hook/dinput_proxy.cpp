@@ -229,9 +229,10 @@ BOOL CALLBACK EnumFilter(const void* instance, void* ref) {
     memcpy(&dev_type, bytes + 0x24, sizeof(dev_type));
     const BYTE type = static_cast<BYTE>(dev_type & 0xFF);
     const mw4hook::Config& config = mw4hook::GetConfig();
-    const bool pass = type == kTypeMouse || type == kTypeKeyboard ||
-                      (config.input_controllers &&
-                       (type == kTypeJoystick || config.input_other_devices));
+    const bool system = type == kTypeMouse || type == kTypeKeyboard;
+    const char* blocked = system ? nullptr : mw4hook::InputDeviceBlocked(guid);
+    const bool pass = system || (config.input_controllers && !blocked &&
+                                 (type == kTypeJoystick || config.input_other_devices));
     if (!FindDevice(guid) && g_device_count < 32) {
         KnownDevice& device = g_devices[g_device_count++];
         device.instance = guid;
@@ -242,8 +243,10 @@ BOOL CALLBACK EnumFilter(const void* instance, void* ref) {
         } else {
             strncpy_s(device.name, reinterpret_cast<const char*>(bytes + 0x28), _TRUNCATE);
         }
-        mw4hook::Log("dinput: device \"%s\" (%s, type %08lX) %s\n", device.name, TypeName(type),
-                     dev_type, pass ? "offered to the game" : "not offered to the game");
+        mw4hook::Log("dinput: device \"%s\" (%s, type %08lX) %s%s%s\n", device.name,
+                     TypeName(type), dev_type,
+                     pass ? "offered to the game" : "not offered to the game",
+                     blocked ? ": " : "", blocked ? blocked : "");
     }
     if (!pass) {
         return TRUE;  // DIENUM_CONTINUE
@@ -258,7 +261,19 @@ HRESULT WINAPI Hook_EnumDevices(void* self, DWORD type, EnumCallback_t callback,
     if (!callback) {
         return original(self, type, callback, ref, flags);
     }
+    mw4hook::InputSafetyInit();  // probe and crash memory, once, before the first listing
     EnumContext context = {callback, ref, IsWide(VtableOf(self))};
+    if (mw4hook::InputEnumerationUnsafe() && type != kTypeMouse && type != kTypeKeyboard) {
+        // DirectInput failed listing the devices in the probe: list only the
+        // keyboard and the mouse (by type, which does not walk the HID
+        // devices).
+        if (type != 0) {
+            return 0;  // DI_OK, nothing listed
+        }
+        const HRESULT mouse = original(self, kTypeMouse, &EnumFilter, &context, flags);
+        const HRESULT keyboard = original(self, kTypeKeyboard, &EnumFilter, &context, flags);
+        return FAILED(mouse) ? mouse : keyboard;
+    }
     return original(self, type, &EnumFilter, &context, flags);
 }
 
@@ -312,6 +327,28 @@ void LogOpen(REFGUID guid, HRESULT result, DWORD code, void* where) {
     mw4hook::Log("dinput: opened \"%s\" -> 0x%08lX\n", name, static_cast<unsigned long>(result));
 }
 
+// Before the game opens a device that is not the system mouse or keyboard:
+// refuse it when it is kept from the game (the probe or the crash memory
+// found it unsafe, or [input] controllers=0), otherwise log it and note it in
+// the crash memory. True when refused (the open then fails like an unplugged
+// device).
+bool RefuseOpen(REFGUID guid, void** out) {
+    const KnownDevice* device = FindDevice(guid);
+    const char* name = device ? device->name : "(not enumerated)";
+    const char* blocked = mw4hook::InputDeviceBlocked(guid);
+    if (blocked || !mw4hook::GetConfig().input_controllers) {
+        mw4hook::Log("dinput: not opening \"%s\": %s\n", name,
+                     blocked ? blocked : "[input] controllers=0");
+        if (out) {
+            *out = nullptr;
+        }
+        return true;
+    }
+    mw4hook::Log("dinput: opening \"%s\" ...\n", name);
+    mw4hook::InputOpenBegin(guid, name);
+    return false;
+}
+
 HRESULT WINAPI Hook_CreateDevice(void* self, REFGUID guid, void** out, IUnknown* outer) {
     auto original =
         reinterpret_cast<CreateDevice_t>(FindOriginal(g_create_tables, VtableOf(self)));
@@ -319,8 +356,9 @@ HRESULT WINAPI Hook_CreateDevice(void* self, REFGUID guid, void** out, IUnknown*
     if (IsSystemDevice(guid)) {
         result = original(self, guid, out, outer);
     } else {
-        const KnownDevice* device = FindDevice(guid);
-        mw4hook::Log("dinput: opening \"%s\" ...\n", device ? device->name : "(not enumerated)");
+        if (RefuseOpen(guid, out)) {
+            return kDeviceNotRegistered;
+        }
         DWORD code = 0;
         void* where = nullptr;
         result = GuardedCreate(original, self, guid, out, outer, &code, &where);
@@ -328,6 +366,9 @@ HRESULT WINAPI Hook_CreateDevice(void* self, REFGUID guid, void** out, IUnknown*
             *out = nullptr;
         }
         LogOpen(guid, result, code, where);
+        if (!code) {
+            mw4hook::InputOpenEnd(guid);  // a fault leaves it in [opening]: skipped next time
+        }
     }
     if (SUCCEEDED(result) && out && mw4hook::GetConfig().debug_automation) {
         PatchDevice(*out);
@@ -343,8 +384,9 @@ HRESULT WINAPI Hook_CreateDeviceEx(void* self, REFGUID guid, REFIID iid, void** 
     if (IsSystemDevice(guid)) {
         result = original(self, guid, iid, out, outer);
     } else {
-        const KnownDevice* device = FindDevice(guid);
-        mw4hook::Log("dinput: opening \"%s\" ...\n", device ? device->name : "(not enumerated)");
+        if (RefuseOpen(guid, out)) {
+            return kDeviceNotRegistered;
+        }
         DWORD code = 0;
         void* where = nullptr;
         result = GuardedCreateEx(original, self, guid, iid, out, outer, &code, &where);
@@ -352,6 +394,9 @@ HRESULT WINAPI Hook_CreateDeviceEx(void* self, REFGUID guid, REFIID iid, void** 
             *out = nullptr;
         }
         LogOpen(guid, result, code, where);
+        if (!code) {
+            mw4hook::InputOpenEnd(guid);  // a fault leaves it in [opening]: skipped next time
+        }
     }
     if (SUCCEEDED(result) && out && mw4hook::GetConfig().debug_automation) {
         PatchDevice(*out);

@@ -90,6 +90,14 @@ struct Config {
     char default_camo = '_';
 };
 
+// Input device safety (input_probe.cpp, issue #34): the probe process, the
+// crash memory (mw4hook-input.ini) and the devices they keep from the game.
+void InputSafetyInit();
+bool InputEnumerationUnsafe();
+const char* InputDeviceBlocked(const GUID& instance);  // reason, or null
+void InputOpenBegin(const GUID& instance, const char* name);
+void InputOpenEnd(const GUID& instance);
+
 // MW5-style keyboard driving (controls.cpp).
 bool InstallControlsHooks();
 bool ThrottleDecayEnabled();

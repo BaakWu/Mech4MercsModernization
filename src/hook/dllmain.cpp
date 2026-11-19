@@ -156,6 +156,15 @@ void ResolveDinputExports();
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
+        // The input probe (input_probe.cpp) runs this DLL in rundll32: only
+        // the real DirectInput is needed there; no hooks, log or relaunch.
+        wchar_t host[MAX_PATH];
+        const DWORD len = GetModuleFileNameW(nullptr, host, MAX_PATH);
+        const wchar_t* name = len ? wcsrchr(host, L'\\') : nullptr;
+        if (name && _wcsicmp(name + 1, L"rundll32.exe") == 0) {
+            mw4hook::ResolveDinputExports();
+            return TRUE;
+        }
         mw4hook::LogInit(instance);
         mw4hook::Log("dllmain: process attach\n");
         EnableDpiAwareness();

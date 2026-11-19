@@ -7,5 +7,6 @@ EXPORTS
     DllGetClassObject=Proxy_DllGetClassObject
     DllRegisterServer=Proxy_DllRegisterServer
     DllUnregisterServer=Proxy_DllUnregisterServer
+    ProbeInputDevices
     Mw4ShellMode=Mw4ShellMode
     Mw4AimMarker=Mw4AimMarker

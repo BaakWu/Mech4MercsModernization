@@ -39,6 +39,7 @@ $sources = @(
     'dinput_proxy.cpp',
     'display.cpp',
     'dllmain.cpp',
+    'input_probe.cpp',
     'iat.cpp',
     'log.cpp',
     'shellscript.cpp',
