@@ -410,6 +410,88 @@ void SkipTextureMemoryTest() {
         ok ? "skipped" : (site ? "patch FAILED" : "not found"));
 }
 
+// Device caps test. After the memory test the hardware setup rejects the
+// card unless the VideoCard.txt LowEndCard flag is clear and the device's
+// triangle caps (GetCaps into the D3DDEVICEDESC7 at 0x01242078, dpcTriCaps
+// at +0x3C) have CULLNONE, SRCALPHA / INVSRCALPHA blending, perspective
+// textures, NEAREST filtering, MODULATE in the DX5-era dwTextureBlendCaps
+// and WRAP addressing (0x007111CF..0x0071123F). Every GPU of the last 25
+// years does all of that, but a current driver does not have to advertise
+// the legacy bits; an RTX 5080 got the Hardware Error with the device
+// created (#35). The hook logs the caps and accepts the device:
+//   test dh,8; jne <reject>   ->   jmp CapsAccepted (logs, then success)
+const DWORD* g_device_desc = nullptr;  // the D3DDEVICEDESC7 (0x01242078)
+void* g_caps_success = nullptr;        // call 0x007432A0; mov al,1; ... ret 8
+
+void __cdecl LogDeviceCaps() {
+    static int logged = 0;
+    if (logged >= 4 || !g_device_desc) {
+        return;
+    }
+    ++logged;
+    const DWORD* tri = g_device_desc + 0x3C / 4;  // D3DPRIMCAPS: dwSize, dwMiscCaps, ...
+    struct Check {
+        const char* name;
+        int field;  // dword index in D3DPRIMCAPS
+        DWORD bit;
+    };
+    static const Check kChecks[] = {
+        {"MiscCaps CULLNONE", 1, 0x10},          {"SrcBlendCaps SRCALPHA", 4, 0x10},
+        {"DestBlendCaps INVSRCALPHA", 5, 0x20}, {"TextureCaps PERSPECTIVE", 8, 0x1},
+        {"TextureFilterCaps NEAREST", 9, 0x1},  {"TextureBlendCaps MODULATE", 10, 0x2},
+        {"TextureAddressCaps WRAP", 11, 0x1},
+    };
+    char missing[256] = {};
+    for (const Check& c : kChecks) {
+        if (!(tri[c.field] & c.bit)) {
+            if (missing[0]) {
+                strcat_s(missing, ", ");
+            }
+            strcat_s(missing, c.name);
+        }
+    }
+    Log("renderer: hardware device caps: dev 0x%08lX misc 0x%08lX src 0x%08lX dest 0x%08lX tex "
+        "0x%08lX filter 0x%08lX blend 0x%08lX address 0x%08lX%s%s\n",
+        g_device_desc[0], tri[1], tri[4], tri[5], tri[8], tri[9], tri[10], tri[11],
+        missing[0] ? "; the game would reject it for missing " : "; all the game checks",
+        missing);
+}
+
+__declspec(naked) void CapsAccepted() {
+    __asm {
+        pushad
+        pushfd
+        call LogDeviceCaps
+        popfd
+        popad
+        jmp dword ptr [g_caps_success]
+    }
+}
+
+void AcceptDeviceCaps() {
+    unsigned char* site = FindUnique(
+        "device_caps_test",
+        "F6 C6 08 75 7D 39 1D ?? ?? ?? ?? 74 0C A1 ?? ?? ?? ?? 83 E0 02 84 C0 75");
+    // The success path, 0x72 bytes on: call rel32; pop edi; pop esi; mov al,1
+    static const unsigned char kSuccess[] = {0x5F, 0x5E, 0xB0, 0x01};
+    bool ok = false;
+    if (site && site[0x72] == 0xE8 && memcmp(site + 0x77, kSuccess, sizeof(kSuccess)) == 0) {
+        // The caps block: mov ecx,[0x012420D8] (the NEAREST check) at +0x19.
+        const DWORD nearest = *reinterpret_cast<const DWORD*>(site + 0x1B);
+        if (site[0x19] == 0x8B && site[0x1A] == 0x0D && nearest == 0x012420D8) {
+            g_device_desc = reinterpret_cast<const DWORD*>(0x01242078);
+            g_caps_success = site + 0x72;
+            unsigned char code[5] = {0xE9};
+            const int rel = static_cast<int>(reinterpret_cast<unsigned char*>(&CapsAccepted) -
+                                             (site + 5));
+            memcpy(code + 1, &rel, 4);
+            ok = WriteCode(site, code, sizeof(code));  // test dh,8 (3) + jne rel8 (2)
+        }
+    }
+    Log("display: device caps test %s\n",
+        ok ? "logged and accepted" : (site ? "patch FAILED (bytes differ)" : "not found"));
+}
+
 // Renderer choice (diagnostics for the "Hardware Error" dialog). GameOS'
 // renderer setup (3.1c 0x00711620, cdecl, no arguments) tries the hardware
 // Direct3D device when the renderer option is 0, at least one enumerated
@@ -604,6 +686,7 @@ bool InstallDisplayHooks() {
     SyncGameSelectedSize();
     Patch16BitFallbacks();
     SkipTextureMemoryTest();
+    AcceptDeviceCaps();
     InstallRendererTrace();
 
     InstallDetour(ssm, 9, reinterpret_cast<void*>(&Hook_SetScreenMode),

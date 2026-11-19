@@ -242,6 +242,21 @@ texture memory minimum skipped`). The other checks after it (the
 `VideoCard.txt` `LowEndCard` flag, which only applies to a few Intel 8xx
 chips under Windows 98, and the Direct3D caps bits) are unchanged.
 
+**Device caps test (logged, then accepted).** After the memory test the
+setup rejects the card unless the `VideoCard.txt` `LowEndCard` flag is clear
+and the triangle caps from `GetCaps` (the `D3DDEVICEDESC7` at `0x01242078`,
+`dpcTriCaps` at `+0x3C`) include `D3DPMISCCAPS_CULLNONE`, `SRCALPHA` /
+`INVSRCALPHA` blending, `D3DPTEXTURECAPS_PERSPECTIVE`, `D3DPTFILTERCAPS_NEAREST`,
+`D3DPTBLENDCAPS_MODULATE` in the DX5-era `dwTextureBlendCaps`, and
+`D3DPTADDRESSCAPS_WRAP` (`0x007111CF..0x0071123F`). Every GPU of the last 25
+years does all of these, but a current driver need not advertise the legacy
+bits. An RTX 5080 got the Hardware Error with the hardware device created
+and the memory test passing (#35; dgVoodoo and the DX11 build worked). The
+hook replaces `test dh,8; jne <reject>` with a jump to a stub that logs the
+caps and continues on the success path (pattern `device_caps_test`; log
+`renderer: hardware device caps: ... ; the game would reject it for missing
+<bits>` or `; all the game checks`).
+
 **Diagnostics.** After each renderer setup the hook logs the inputs and the
 result, and each display device's caps:
 
