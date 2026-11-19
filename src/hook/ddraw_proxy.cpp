@@ -1846,9 +1846,66 @@ void PatchTrace(void** vtable, int index, void* hook, void** original) {
 }
 
 
+// IDirect3D7::EnumDevices (slot 3): GameOS counts a display device as usable
+// for 3D only if one of its Direct3D devices has hardware rasterization
+// (D3DDEVCAPS_HWRASTERIZATION, 0x80000); without one it uses its software
+// renderer and the game shows "Hardware Error". Each device is logged once.
+using D3DEnumCallback_t = HRESULT(CALLBACK*)(char* description, char* name, void* desc,
+                                             void* context);
+using D3DEnumDevices_t = HRESULT(WINAPI*)(void*, D3DEnumCallback_t, void*);
+D3DEnumDevices_t g_original_d3d_enum = nullptr;
+
+struct D3DEnumContext {
+    D3DEnumCallback_t callback;
+    void* context;
+};
+
+HRESULT CALLBACK D3DEnumLogger(char* description, char* name, void* desc, void* context) {
+    static char seen[8][64] = {};
+    bool logged = false;
+    for (auto& s : seen) {
+        if (name && strncmp(s, name, sizeof(s) - 1) == 0) {
+            logged = true;
+            break;
+        }
+    }
+    if (!logged && name) {
+        for (auto& s : seen) {
+            if (!s[0]) {
+                strncpy_s(s, name, _TRUNCATE);
+                break;
+            }
+        }
+        const DWORD caps = desc ? *static_cast<const DWORD*>(desc) : 0;
+        Log("d3d device \"%s\" (%s): devcaps 0x%08lX%s\n", name,
+            description ? description : "", caps,
+            (caps & 0x80000) ? " hardware rasterization" : "");
+    }
+    const D3DEnumContext* c = static_cast<const D3DEnumContext*>(context);
+    return c->callback(description, name, desc, c->context);
+}
+
+HRESULT WINAPI Hook_D3DEnumDevices(void* d3d, D3DEnumCallback_t callback, void* context) {
+    if (!callback) {
+        return g_original_d3d_enum(d3d, callback, context);
+    }
+    D3DEnumContext c = {callback, context};
+    const HRESULT result = g_original_d3d_enum(d3d, &D3DEnumLogger, &c);
+    if (FAILED(result)) {
+        Log("d3d EnumDevices failed 0x%08lX\n", static_cast<unsigned long>(result));
+    }
+    return result;
+}
+
 HRESULT WINAPI Hook_D3DCreateDevice(void* d3d, REFCLSID clsid, IDirectDrawSurface7* target,
                                     void** device) {
     HRESULT result = g_original_create_device(d3d, clsid, target, device);
+    if (FAILED(result)) {
+        // IID_IDirect3DHALDevice 84E63DE0, IID_IDirect3DTnLHalDevice F5049E78,
+        // IID_IDirect3DRGBDevice A4665C60 (software).
+        Log("d3d CreateDevice %08lX failed 0x%08lX\n", clsid.Data1,
+            static_cast<unsigned long>(result));
+    }
     if (SUCCEEDED(result) && device && *device) {
         void** vtable = *reinterpret_cast<void***>(*device);
         if (vtable[10] != reinterpret_cast<void*>(&Hook_D3DClear)) {
@@ -1918,6 +1975,12 @@ HRESULT WINAPI Hook_DDQueryInterface(void* self, REFIID iid, void** out) {
                 g_original_create_device = reinterpret_cast<D3DCreateDevice_t>(vtable[4]);
             }
             PatchSlot(vtable, 4, reinterpret_cast<void*>(&Hook_D3DCreateDevice));
+        }
+        if (vtable[3] != reinterpret_cast<void*>(&Hook_D3DEnumDevices)) {
+            if (!g_original_d3d_enum) {
+                g_original_d3d_enum = reinterpret_cast<D3DEnumDevices_t>(vtable[3]);
+            }
+            PatchSlot(vtable, 3, reinterpret_cast<void*>(&Hook_D3DEnumDevices));
         }
     }
     return result;

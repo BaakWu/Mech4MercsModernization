@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstdio>
 #include <cwchar>
 #include <cwctype>
@@ -481,7 +482,41 @@ void ReplaceAll(std::string& text, const std::string& from,
     }
 }
 
-bool PatchOptionsIni(const std::wstring& install, std::wstring& error) {
+// The game shows "Your current hardware or driver setup is not compatible"
+// when options.ini has unusable display values (videodriverindex=-1,
+// screenwidth=0, bitdepth=65535 were seen). A first install writes the
+// known-good keys below; an update (repairOnly) keeps the player's choices
+// and only replaces keys that are missing or invalid. repaired counts them.
+bool ValidDisplayValue(const std::string& key, const std::string& value) {
+    if (key == "windowed") {
+        return true;  // read by the hook; anything else means on
+    }
+    if (value.empty() || value.size() > 6) {
+        return false;
+    }
+    for (char c : value) {
+        if (c < '0' || c > '9') {
+            return false;  // also rejects negative numbers
+        }
+    }
+    const int number = std::atoi(value.c_str());
+    if (key == "videodriverindex") {
+        return number <= 15;
+    }
+    if (key == "screenwidth" || key == "screenheight") {
+        return number >= 480 && number <= 16384;
+    }
+    if (key == "bitdepth") {
+        return number == 16 || number == 32;
+    }
+    return true;
+}
+
+bool PatchOptionsIni(const std::wstring& install, std::wstring& error, bool repairOnly = false,
+                     int* repaired = nullptr) {
+    if (repaired) {
+        *repaired = 0;
+    }
     const std::wstring path = Join(install, kOptionsName);
     std::string text;
     if (FileExists(path)) {
@@ -565,6 +600,9 @@ bool PatchOptionsIni(const std::wstring& install, std::wstring& error) {
         for (const auto& pair : wanted) {
             lines.push_back(pair.first + "=" + pair.second);
         }
+        if (repaired) {
+            *repaired = static_cast<int>(wanted.size()) - 1;
+        }
     } else {
         for (int i = sectionStart + 1; i < sectionEnd; ++i) {
             std::string line = TrimAscii(lines[i]);
@@ -575,7 +613,13 @@ bool PatchOptionsIni(const std::wstring& install, std::wstring& error) {
             std::string key = ToLowerAscii(TrimAscii(line.substr(0, equals)));
             for (size_t w = 0; w < wanted.size(); ++w) {
                 if (key == wanted[w].first) {
-                    lines[i] = wanted[w].first + "=" + wanted[w].second;
+                    const std::string value = ToLowerAscii(TrimAscii(line.substr(equals + 1)));
+                    if (!repairOnly || !ValidDisplayValue(key, value)) {
+                        if (repairOnly && repaired) {
+                            ++*repaired;
+                        }
+                        lines[i] = wanted[w].first + "=" + wanted[w].second;
+                    }
                     done[w] = true;
                     break;
                 }
@@ -585,6 +629,9 @@ bool PatchOptionsIni(const std::wstring& install, std::wstring& error) {
         for (size_t w = 0; w < wanted.size(); ++w) {
             if (!done[w]) {
                 missing.push_back(wanted[w].first + "=" + wanted[w].second);
+                if (repairOnly && repaired && wanted[w].first != "windowed") {
+                    ++*repaired;
+                }
             }
         }
         if (!missing.empty()) {
@@ -593,6 +640,9 @@ bool PatchOptionsIni(const std::wstring& install, std::wstring& error) {
         }
     }
 
+    if (repairOnly && repaired && *repaired == 0) {
+        return true;  // nothing invalid: leave the file as it is
+    }
     std::string output;
     for (const auto& line : lines) {
         output += line;
@@ -956,7 +1006,7 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1, in
     const bool updating = FileExists(recordPath);
     Print(L"\nPlan:\n");
     if (updating) {
-        Print(L"  - keep the display settings in options.ini (update)\n");
+        Print(L"  - keep the display settings in options.ini; repair invalid ones (update)\n");
     } else {
         Print(L"  - %ls display keys -> 1024x768, 32-bit\n",
               existingOptions ? L"patch" : L"create");
@@ -1124,6 +1174,19 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1, in
         return 1;
     }
     state.recordWritten = true;
+
+    // An update keeps the player's display choices but repairs values the
+    // game cannot use (the "hardware not compatible" dialog). Done last, so a
+    // failure here never rolls back the install.
+    if (updating) {
+        int repaired = 0;
+        std::wstring repairError;
+        if (!PatchOptionsIni(install, repairError, true, &repaired)) {
+            PrintError(L"warning: options.ini not checked: %ls\n", repairError.c_str());
+        } else if (repaired > 0) {
+            Print(L"Repaired %d invalid display setting(s) in options.ini\n", repaired);
+        }
+    }
 
     Print(L"\nInstalled:\n");
     Print(L"  dinput.dll   %hs\n", dinputHash.c_str());

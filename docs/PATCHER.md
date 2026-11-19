@@ -41,9 +41,17 @@ restart itself elevated (`runas`, passing `--dir "<folder>"`, `--mw5` and
   MW5 choice is applied.
 - The player's Throttle Decay, Gyro Aim and aim settings from the installed
   `mw4hook.ini` are kept.
-- The display settings in `options.ini` are left alone. Only a first install
-  writes the 1024x768 / 32-bit / Windowed keys; before 1.4 every update reset
-  the resolution.
+- The player's display settings in `options.ini` are kept. Only a first
+  install writes the 1024x768 / 32-bit / Windowed keys; before 1.4 every
+  update reset the resolution. An update repairs keys that are missing or
+  that the game cannot use, the values behind the "hardware or driver setup
+  is not compatible" dialog: `videodriverindex` not 0-15 (e.g. `-1`),
+  `screenwidth` / `screenheight` outside 480-16384 (e.g. `0`) and `bitdepth`
+  other than 16 or 32 (e.g. `65535`). They get the first-install values and
+  the installer reports `Repaired N invalid display setting(s)`. Valid values
+  are not touched, and the file is not rewritten when nothing is invalid. The
+  repair runs after the install is complete, so a failure there is only a
+  warning.
 
 ## What it does
 

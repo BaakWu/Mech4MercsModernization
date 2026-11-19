@@ -215,6 +215,45 @@ it, and logs `sound: CreateSoundBuffer lost the buffer; N retries`. Not yet
 verified against a real recurrence. Applies only while `[sound] background`
 is on, since that installs the hook.
 
+### "Hardware Error" at startup: renderer choice and texture memory test
+
+The dialog "Your current hardware or driver setup is not compatible with
+MechWarrior 4" (`MissionLang_MERCS.dll` strings 57/58) is shown at startup
+(3.1c `0x0040AC4E`) when GameOS reports, through
+`gos_GetMachineInformation(0x33)`, that it is not on the hardware renderer
+(flag `0x012423A4`, set only by the hardware device setup `0x00710790`).
+GameOS' renderer setup (`0x00711620`) tries hardware Direct3D only when the
+renderer option is 0 and at least one display device has a Direct3D 7 device
+with hardware rasterization (`D3DDEVCAPS_HWRASTERIZATION`, checked by the
+`IDirect3D7::EnumDevices` callback `0x0073C710`). It falls back to the
+software renderer (3) when that is not so, or when the hardware setup
+rejects the device. A broken `options.ini` (section 4.1 of AGENTS.md) is one
+way to get there; others are a missing GPU driver ("Microsoft Basic Display
+Adapter"), Remote Desktop or a virtual machine, and the setup's own checks.
+
+**Texture memory test (skipped).** The hardware setup rejects a card whose
+local + AGP video memory (record `+0x10AC` + `+0x10B0`, from DirectDraw) is
+below the game's minimum of `0x1400` KB (5 MB, set at `0x0040B3BC`):
+`mov ecx,[min]; cmp ecx,ebx; je; shl ecx,0Ah; cmp eax,ecx; jb <reject>`
+(`0x007111BA`). The total is a 32-bit byte count; current cards report
+gigabytes, so it can wrap below 5 MB, and no current card has less. The hook
+NOPs the `jb` (pattern `texture_memory_test`, always on; log `display:
+texture memory minimum skipped`). The other checks after it (the
+`VideoCard.txt` `LowEndCard` flag, which only applies to a few Intel 8xx
+chips under Windows 98, and the Direct3D caps bits) are unchanged.
+
+**Diagnostics.** After each renderer setup the hook logs the inputs and the
+result, and each display device's caps:
+
+```
+renderer: option 0, 3 device(s), 4 with hardware 3D, selected 0, windowed, 32-bit -> hardware Direct3D
+renderer:   device 0 "aticfx32.dll" devcaps 0x061BBEF1 (hardware rasterization)
+```
+
+and the ddraw log lists every Direct3D device Windows offers (`d3d device
+"Direct3D HAL" (...): devcaps ... hardware rasterization`) and any failed
+`CreateDevice` with its HRESULT. A player's log then shows which input sent
+the game to the software renderer.
 ### Input devices at startup (`[input]`; issue #34)
 
 At startup the game enumerates every attached DirectInput device

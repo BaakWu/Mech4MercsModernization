@@ -388,6 +388,112 @@ void Patch16BitFallbacks() {
         renderer ? "ok" : "missing", fallback ? "ok" : "missing");
 }
 
+// Texture memory test. GameOS' hardware device setup (0x00710790) rejects a
+// card whose local + AGP video memory is below the game's minimum (0x1400
+// KB, set at 0x0040B3BC) and the game then runs its software renderer and
+// shows "Hardware Error":
+//   mov ecx,[minimum]; cmp ecx,ebx; je skip; shl ecx,0Ah; cmp eax,ecx;
+//   jb <reject>
+// The total is a 32-bit byte count of DirectDraw's figures (+ doubled with
+// VideoCard.txt AllowLowMemoryCard), which current cards report in
+// gigabytes, so it can wrap below the minimum. Every current card has far
+// more than 5 MB; the jb is removed.
+void SkipTextureMemoryTest() {
+    unsigned char* site = FindUnique(
+        "texture_memory_test", "8B 0D ?? ?? ?? ?? 3B CB 74 0B C1 E1 0A 3B C1 0F 82");
+    bool ok = false;
+    if (site) {
+        static const unsigned char kNops[6] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+        ok = WriteCode(site + 15, kNops, sizeof(kNops));
+    }
+    Log("display: texture memory minimum %s\n",
+        ok ? "skipped" : (site ? "patch FAILED" : "not found"));
+}
+
+// Renderer choice (diagnostics for the "Hardware Error" dialog). GameOS'
+// renderer setup (3.1c 0x00711620, cdecl, no arguments) tries the hardware
+// Direct3D device when the renderer option is 0, at least one enumerated
+// device has hardware rasterization (D3DDEVCAPS_HWRASTERIZATION, checked
+// by the IDirect3D7::EnumDevices callback 0x0073C710) and the mode is
+// windowed or 16/32-bit; otherwise, or when the hardware device cannot be
+// made, it falls back to the software renderer (3). Its device setup
+// (0x00710790) sets the "hardware" flag 0x012423A4 only for the hardware
+// renderer, and the startup check after it (0x0040AC4E,
+// gos_GetMachineInformation 0x33) shows "Your current hardware or driver
+// setup is not compatible with MechWarrior 4" when the flag is 0. The hook
+// logs the inputs to that choice and the result after every setup.
+using InitRenderer_t = int(__cdecl*)();
+InitRenderer_t g_init_renderer = nullptr;  // trampoline
+const DWORD* g_renderer_option = nullptr;  // options.ini renderer
+const DWORD* g_hw_devices = nullptr;       // devices with hardware rasterization
+const BYTE* g_renderer_fullscreen = nullptr;
+const DWORD* g_renderer_bpp = nullptr;
+
+int __cdecl Hook_InitRenderer() {
+    const int result = g_init_renderer();
+    static int logged = 0;
+    if (logged >= 8) {
+        return result;
+    }
+    ++logged;
+    const DWORD hardware = *reinterpret_cast<const DWORD*>(0x012423A4);
+    const DWORD devices = g_hw_devices[1];
+    const DWORD selected = g_renderer_option[-1];
+    Log("renderer: option %lu, %lu device(s), %lu with hardware 3D, selected %ld, %s, %lu-bit "
+        "-> %s\n",
+        *g_renderer_option, devices, *g_hw_devices, static_cast<long>(selected),
+        *g_renderer_fullscreen ? "fullscreen" : "windowed", *g_renderer_bpp,
+        hardware ? "hardware Direct3D"
+                 : "software renderer (the game reports a Hardware Error)");
+    // Device records: g_hw_devices + 0x10, 0x11D8 bytes each; the
+    // D3DDEVICEDESC7 copy (dwDevCaps first) at +0x5BC.
+    const unsigned char* records = reinterpret_cast<const unsigned char*>(g_hw_devices) + 0x10;
+    for (DWORD i = 0; i < devices && i < 8; ++i) {
+        const unsigned char* record = records + i * 0x11D8;
+        if (IsBadReadPtr(record, 0x5C0)) {
+            break;
+        }
+        const DWORD caps = *reinterpret_cast<const DWORD*>(record + 0x5BC);
+        // The first readable name in the record (the DirectDraw description).
+        char name[64] = {};
+        for (int o = 0x10; o < 0x5BC && !name[0]; ++o) {
+            int n = 0;
+            while (o + n < 0x5BC && record[o + n] >= 0x20 && record[o + n] < 0x7F && n < 63) {
+                ++n;
+            }
+            if (n >= 6 && record[o + n] == 0) {
+                memcpy(name, record + o, n);
+            }
+            o += n;
+        }
+        Log("renderer:   device %lu \"%s\" devcaps 0x%08lX%s\n", i, name, caps,
+            (caps & 0x80000) ? " (hardware rasterization)" : " (no hardware rasterization)");
+    }
+    return result;
+}
+
+void InstallRendererTrace() {
+    // push ebp; mov ebp,esp; sub esp,30h; mov eax,[renderer]; push ebx;
+    // xor ebx,ebx; push esi; cmp eax,ebx; jne +30h; cmp [hw devices],ebx;
+    // je; mov cl,[fullscreen]; cmp cl,bl; jne; mov eax,[bpp]
+    unsigned char* init = FindUnique(
+        "renderer_init",
+        "55 8B EC 83 EC 30 A1 ?? ?? ?? ?? 53 33 DB 56 3B C3 75 30 39 1D ?? ?? ?? ?? 74 28 8A "
+        "0D ?? ?? ?? ?? 3A CB 75 0F A1");
+    if (!init) {
+        return;
+    }
+    auto addr = [](unsigned char* p) { return *reinterpret_cast<DWORD*>(p); };
+    g_renderer_option = reinterpret_cast<const DWORD*>(addr(init + 7));
+    g_hw_devices = reinterpret_cast<const DWORD*>(addr(init + 0x15));
+    g_renderer_fullscreen = reinterpret_cast<const BYTE*>(addr(init + 0x1D));
+    g_renderer_bpp = reinterpret_cast<const DWORD*>(addr(init + 0x26));
+    // push ebp; mov ebp,esp; sub esp,30h (6 bytes) is position independent.
+    InstallDetour(init, 6, reinterpret_cast<void*>(&Hook_InitRenderer),
+                  reinterpret_cast<void**>(&g_init_renderer));
+    Log("display: renderer trace %s\n", g_init_renderer ? "ok" : "failed");
+}
+
 }  // namespace
 
 void DisplayInit() {
@@ -497,6 +603,8 @@ bool InstallDisplayHooks() {
 
     SyncGameSelectedSize();
     Patch16BitFallbacks();
+    SkipTextureMemoryTest();
+    InstallRendererTrace();
 
     InstallDetour(ssm, 9, reinterpret_cast<void*>(&Hook_SetScreenMode),
                   reinterpret_cast<void**>(&g_set_screen_mode));
