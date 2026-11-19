@@ -59,6 +59,7 @@ void LoadConfig() {
         GetPrivateProfileIntW(L"debug", L"automation", 0, path) != 0;
     g_config.debug_coop_trace = GetPrivateProfileIntW(L"debug", L"coop_trace", 0, path) != 0;
     GetPrivateProfileStringW(L"debug", L"coop_mission", L"", g_config.debug_coop_mission, 64, path);
+    g_config.debug_coop_lance = GetPrivateProfileIntW(L"debug", L"coop_lance", 0, path) != 0;
     g_config.controls_mw5 = GetPrivateProfileIntW(L"controls", L"mw5", 0, path) != 0;
     g_config.throttle_decay = GetPrivateProfileIntW(L"controls", L"decay", 0, path) != 0;
     g_config.aim_track_pointer = GetPrivateProfileIntW(L"aim", L"track_pointer", 0, path) != 0;

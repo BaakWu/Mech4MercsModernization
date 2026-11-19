@@ -33,17 +33,29 @@ void* g_script_continue = nullptr;   // the network branch of the script choice
 void* g_script_load = nullptr;       // the single-player branch (load the mission's script)
 char g_mission[64] = {};
 char g_path[MAX_PATH] = {};
+// coop_mission=campaign: the mission the host last selected in the campaign
+// (the shell's selected mission name, shell+0x40970), captured by the watcher
+// while the game is not networked (the lobby later sets it to its map).
+char g_campaign_mission[64] = {};
 
 void* Campaign();
+
+const char* CoopMission() {
+    if (_stricmp(g_mission, "campaign") == 0) {
+        return g_campaign_mission[0] ? g_campaign_mission : nullptr;
+    }
+    return g_mission[0] ? g_mission : nullptr;
+}
 
 void __fastcall Hook_SetMissionPath(void* game, void* /*edx*/, const char* path) {
     void* ret = _ReturnAddress();
     const bool network = ret == g_net_return;
     const char* use = path;
-    if (network && g_mission[0] && path) {
+    const char* mission = CoopMission();
+    if (network && mission && path) {
         // The network start passes the mission's instance inside its archive,
         // "Missions\<name>\<name>.instance"; use the other mission's.
-        sprintf_s(g_path, "Missions\\%s\\%s.instance", g_mission, g_mission);
+        sprintf_s(g_path, "Missions\\%s\\%s.instance", mission, mission);
         use = g_path;
     }
     g_own_script = use != path;  // the next mission load keeps the mission's own script
@@ -71,15 +83,85 @@ void __fastcall Hook_SetMissionPath(void* game, void* /*edx*/, const char* path)
             using StrCtor_t = void(__thiscall*)(void** self, const char* text);
             using StrDtor_t = void(__thiscall*)(void** self);
             void* name = nullptr;
-            reinterpret_cast<StrCtor_t>(0x00417D90)(&name, g_mission);
+            reinterpret_cast<StrCtor_t>(0x00417D90)(&name, mission);
             void** slot = reinterpret_cast<void**>(static_cast<unsigned char*>(shell) + 0x40970);
             void* saved = *slot;
             *slot = name;
-            Log("coop: campaign mission setup (0x00511260) for \"%s\" ...\n", g_mission);
+            Log("coop: campaign mission setup (0x00511260) for \"%s\" ...\n", mission);
             reinterpret_cast<CampaignSetup_t>(setup)(shell, 0);
             Log("coop: campaign mission setup done\n");
             *slot = saved;
             reinterpret_cast<StrDtor_t>(0x004149D0)(&name);
+            // The lancemates: the campaign start adds one vehicle per
+            // lancemate in the campaign's lance (campaign+0x40) with
+            // game->0x00529A60(); the network start only sends the player's.
+            static const unsigned char kLance[] = {0x6A, 0xFF, 0x68, 0xA0, 0x76, 0x76, 0x00,
+                                                   0x64, 0xA1, 0x00, 0x00, 0x00, 0x00};
+            void* lance = reinterpret_cast<void*>(0x00529A60);
+            if (GetConfig().debug_coop_lance && memcmp(lance, kLance, sizeof(kLance)) == 0) {
+                using AddLance_t = void(__thiscall*)(void* game);
+                // The local player's index (the campaign start reads it from
+                // [0x0103B60C]+0x28 / [0x0103B608]+0x28); the lance add uses
+                // roster positions 0.. as slot indices.
+                const unsigned char* a = *reinterpret_cast<unsigned char**>(0x0103B60C);
+                const unsigned char* b = *reinterpret_cast<unsigned char**>(0x0103B608);
+                Log("coop: local player index %d / %d\n", a ? a[0x28] : -1, b ? b[0x28] : -1);
+                for (int s = 0; s < 8; ++s) {
+                    const unsigned char* slot = static_cast<unsigned char*>(game) + s * 0x22AC;
+                    Log("coop:   slot %d: request %p connection %p flags %02X %02X\n", s,
+                        *reinterpret_cast<void* const*>(slot + 0x20BCBC),
+                        *reinterpret_cast<void* const*>(slot + 0x20BCC0), slot[0x20BECC],
+                        slot[0x20BECD]);
+                }
+                // The lance add uses roster positions as slot indices (player
+                // 0, lancemates 1..), but in a network game the host is a
+                // connection slot too (index 1 when hosting). Shift lancemates
+                // that land on or above the host's slot up by one, and give
+                // the host's slot back its contents from before the add.
+                const int host = a ? a[0x28] : 0;
+                const size_t kSlot = 0x22AC;
+                const int kSlots = 16;
+                unsigned char* slots = static_cast<unsigned char*>(game) + 0x20BCBC;
+                // Snapshot every slot, add the lance, then move each added
+                // lancemate (slot+0x210 == 1) to the free slots after the
+                // host's, and give the slots it used back their contents.
+                static unsigned char before[16][0x22AC];
+                static unsigned char moved[16][0x22AC];
+                memcpy(before, slots, sizeof(before));
+                Log("coop: adding the campaign lance (0x00529A60) ...\n");
+                reinterpret_cast<AddLance_t>(lance)(game);
+                Log("coop: campaign lance added\n");
+                int count = 0;
+                int from[16];
+                for (int s = 0; s < kSlots; ++s) {
+                    if (slots[s * kSlot + 0x210] == 1 && before[s][0x210] != 1) {
+                        memcpy(moved[count], slots + s * kSlot, kSlot);
+                        from[count++] = s;
+                        memcpy(slots + s * kSlot, before[s], kSlot);
+                    }
+                }
+                int next = host + 1;
+                for (int k = 0; k < count; ++k) {
+                    // The next slot that was empty (no request) before the add.
+                    while (next < kSlots &&
+                           *reinterpret_cast<void* const*>(before[next]) != nullptr) {
+                        ++next;
+                    }
+                    if (next >= kSlots) {
+                        Log("coop: no free slot for lancemate %d\n", k);
+                        break;
+                    }
+                    memcpy(slots + next * kSlot, moved[k], kSlot);
+                    Log("coop: lancemate from slot %d placed in slot %d (host slot %d)\n",
+                        from[k], next, host);
+                    ++next;
+                }
+                for (int s = 0; s < 8; ++s) {
+                    Log("coop:   slot %d after: request %p flags %02X\n", s,
+                        *reinterpret_cast<void* const*>(slots + s * kSlot),
+                        slots[s * kSlot + 0x210]);
+                }
+            }
         } else {
             Log("coop: campaign mission setup skipped (no shell or bytes differ)\n");
         }
@@ -189,6 +271,44 @@ void InstallKeepCampaign() {
     const bool ok = WriteCode(start, code, sizeof(code));
     Log("coop: network screens keep the single-player state (%p -> %p): %s\n", start, end,
         ok ? "patched" : "FAILED");
+}
+
+// MWMission's update (0x0060AA90) runs the host's network rules when the game
+// is networked: cmp byte [edi+17h],1; jne <skip>; cmp [esi+60h],ebp; je ...
+// They recycle a game with fewer than 2 players for 60 s, start the round when
+// 2 or more players (lancemates count) have been in for 5 s (0x0060DAC0), and
+// end the game on its time or frag limit. A co-op mission ends through its own
+// script, so the stub skips them while g_own_script is set.
+void* g_rules_continue = nullptr;
+void* g_rules_skip = nullptr;
+
+__declspec(naked) void StubNetworkRules() {
+    __asm {
+        cmp byte ptr [g_own_script], 0
+        jne skip
+        cmp byte ptr [edi+17h], 1
+        jne skip
+        jmp dword ptr [g_rules_continue]
+    skip:
+        jmp dword ptr [g_rules_skip]
+    }
+}
+
+void InstallNetworkRulesGate() {
+    unsigned char* site = FindUnique("mission_network_rules",
+                                     "80 7F 17 01 0F 85 ?? ?? ?? ?? 39 6E 60 0F 84");
+    if (!site) {
+        return;
+    }
+    g_rules_continue = site + 10;
+    g_rules_skip = site + 10 + *reinterpret_cast<int*>(site + 6);
+    unsigned char code[10] = {0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90};
+    const int rel = static_cast<int>(reinterpret_cast<unsigned char*>(&StubNetworkRules) -
+                                     (site + 5));
+    memcpy(code + 1, &rel, 4);
+    const bool ok = WriteCode(site, code, sizeof(code));
+    Log("coop: mission network rules gate %s (skip %p)\n", ok ? "patched" : "FAILED",
+        g_rules_skip);
 }
 
 void InstallAiGate() {
@@ -426,6 +546,32 @@ LONG CALLBACK CoopExceptionLog(EXCEPTION_POINTERS* info) {
         sprintf_s(what, "exception %08lX at %p (thread %lu)", code,
                   info->ExceptionRecord->ExceptionAddress, GetCurrentThreadId());
         LogStackFrom(what, reinterpret_cast<void**>(info->ContextRecord->Esp));
+        const CONTEXT* c = info->ContextRecord;
+        Log("coop:   eax=%08lX ebx=%08lX ecx=%08lX edx=%08lX esi=%08lX edi=%08lX ebp=%08lX "
+            "esp=%08lX\n",
+            c->Eax, c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
+        const DWORD* sp = reinterpret_cast<const DWORD*>(c->Esp);
+        if (!IsBadReadPtr(sp, 32 * 4)) {
+            char line[512];
+            int n = sprintf_s(line, "coop:   stack:");
+            for (int i = 0; i < 32; ++i) {
+                n += sprintf_s(line + n, sizeof(line) - n, " %08lX", sp[i]);
+            }
+            Log("%s\n", line);
+        }
+        // The EBP chain.
+        char line[512];
+        int n = sprintf_s(line, "coop:   ebp chain:");
+        const uintptr_t* fp = reinterpret_cast<const uintptr_t*>(c->Ebp);
+        for (int k = 0; k < 20 && fp && !IsBadReadPtr(fp, 8); ++k) {
+            n += sprintf_s(line + n, sizeof(line) - n, " %08X", static_cast<unsigned>(fp[1]));
+            const uintptr_t* up = reinterpret_cast<const uintptr_t*>(fp[0]);
+            if (up <= fp) {
+                break;
+            }
+            fp = up;
+        }
+        Log("%s\n", line);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -582,6 +728,31 @@ DWORD WINAPI CampaignWatch(LPVOID) {
         unsigned char* shell = *reinterpret_cast<unsigned char**>(0x0103D850);
         const int mode = shell ? *reinterpret_cast<int*>(shell + 0x24) : -99;
         const uintptr_t loop = *reinterpret_cast<uintptr_t*>(0x01240974);
+        // coop_mission=campaign: remember the campaign's selected mission
+        // while the game is not networked (game+0x17 == 0).
+        if (_stricmp(g_mission, "campaign") == 0 && campaign && shell) {
+            const uintptr_t holder = *reinterpret_cast<uintptr_t*>(0x0103B0BC);
+            const uintptr_t globals =
+                holder ? *reinterpret_cast<uintptr_t*>(holder) ^
+                             *reinterpret_cast<uintptr_t*>(0x0103B0B8)
+                       : 0;
+            const uintptr_t game =
+                globals ? *reinterpret_cast<uintptr_t*>(globals + 0x0C) ^ 0x85739531u : 0;
+            const char* name = *reinterpret_cast<const char**>(shell + 0x40970);
+            if (game && !*reinterpret_cast<unsigned char*>(game + 0x17) && name &&
+                !IsBadReadPtr(name, 1) && name[0] && strncmp(name, g_campaign_mission, 63) != 0) {
+                bool ok = true;
+                for (int i = 0; i < 63 && name[i]; ++i) {
+                    const char c = name[i];
+                    ok = ok && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                (c >= '0' && c <= '9') || c == '_');
+                }
+                if (ok) {
+                    strncpy_s(g_campaign_mission, name, 63);
+                    Log("coop: campaign mission selected: %s\n", g_campaign_mission);
+                }
+            }
+        }
         if (!armed && *reinterpret_cast<uintptr_t*>(0x01240974) == 0x0052B940) {  // menus up
             armed = ArmCampaignBreakpoint();
         }
@@ -617,7 +788,96 @@ DWORD WINAPI CampaignWatch(LPVOID) {
     }
 }
 
+// Shell callback trace: the shell registers each $$Callback$$ with
+// 0x006C2F00(name, impl, ...) (cdecl). The detour gives every callback a
+// thunk that logs its name (the first 20 calls per name) before running it.
+void* g_register_tramp = nullptr;
+unsigned char* g_thunks = nullptr;
+size_t g_thunk_used = 0;
+const size_t kThunkPool = 64 * 1024;
+
+struct CbCount {
+    const char* name;
+    int count;
+};
+CbCount g_cb_counts[1024];
+int g_cb_used = 0;
+
+void __cdecl LogCallback(const char* name) {
+    int* count = nullptr;
+    for (int i = 0; i < g_cb_used; ++i) {
+        if (g_cb_counts[i].name == name) {
+            count = &g_cb_counts[i].count;
+            break;
+        }
+    }
+    if (!count && g_cb_used < 1024) {
+        g_cb_counts[g_cb_used] = {name, 0};
+        count = &g_cb_counts[g_cb_used++].count;
+    }
+    if (count && (*count)++ < 20) {
+        Log("cb: %s\n", name);
+    }
+}
+
+void* __cdecl MakeCallbackThunk(const char* name, void* impl) {
+    if (!g_thunks) {
+        g_thunks = static_cast<unsigned char*>(
+            VirtualAlloc(nullptr, kThunkPool, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    }
+    if (!g_thunks || !name || !impl || g_thunk_used + 32 > kThunkPool) {
+        return impl;
+    }
+    unsigned char* t = g_thunks + g_thunk_used;
+    g_thunk_used += 32;
+    unsigned char* p = t;
+    *p++ = 0x60;  // pushad
+    *p++ = 0x68;  // push name
+    memcpy(p, &name, 4);
+    p += 4;
+    *p++ = 0xB8;  // mov eax, LogCallback
+    void* log = reinterpret_cast<void*>(&LogCallback);
+    memcpy(p, &log, 4);
+    p += 4;
+    *p++ = 0xFF;  // call eax
+    *p++ = 0xD0;
+    *p++ = 0x83;  // add esp, 4
+    *p++ = 0xC4;
+    *p++ = 0x04;
+    *p++ = 0x61;  // popad
+    *p++ = 0x68;  // push impl
+    memcpy(p, &impl, 4);
+    p += 4;
+    *p++ = 0xC3;  // ret (jumps to impl with the caller's stack)
+    return t;
+}
+
+__declspec(naked) void StubRegisterCallback() {
+    __asm {
+        mov eax, [esp + 4]   // name
+        mov ecx, [esp + 8]   // impl
+        push ecx
+        push eax
+        call MakeCallbackThunk
+        add esp, 8
+        mov [esp + 8], eax
+        jmp dword ptr [g_register_tramp]
+    }
+}
+
+void InstallCallbackTrace() {
+    unsigned char* f = reinterpret_cast<unsigned char*>(0x006C2F00);
+    // mov eax,[0x01210AB0]; push ebx; push ebp; mov ebp,[esp+0Ch]
+    static const unsigned char kReg[] = {0xA1, 0xB0, 0x0A, 0x21, 0x01, 0x53, 0x55,
+                                         0x8B, 0x6C, 0x24, 0x0C};
+    if (memcmp(f, kReg, sizeof(kReg)) == 0) {
+        InstallDetour(f, 5, reinterpret_cast<void*>(&StubRegisterCallback), &g_register_tramp);
+    }
+    Log("coop: callback trace %s\n", g_register_tramp ? "ok" : "skipped");
+}
+
 void InstallEndTrace() {
+    InstallCallbackTrace();
     if (HANDLE watch = CreateThread(nullptr, 0, CampaignWatch, nullptr, 0, nullptr)) {
         CloseHandle(watch);
     }
@@ -702,6 +962,7 @@ bool InstallCoopHooks() {
         InstallScriptChoice();
         InstallAiGate();
         InstallKeepCampaign();
+        InstallNetworkRulesGate();
     }
     return true;
 }

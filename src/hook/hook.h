@@ -72,6 +72,7 @@ struct Config {
     bool debug_automation = false;
     bool debug_coop_trace = false;     // [debug] coop_trace: log mission starts (#16 recon)
     wchar_t debug_coop_mission[64] = {};  // [debug] coop_mission: network start loads this mission
+    bool debug_coop_lance = false;     // [debug] coop_lance: add the campaign lance to a co-op mission
     bool controls_mw5 = false;  // [controls] mw5: MW5-style driving (opt-in)
     bool throttle_decay = false;  // [controls] decay: initial Throttle Decay setting
     bool aim_track_pointer = false;  // [aim] track_pointer: mouse moves an aim point (opt-in)
