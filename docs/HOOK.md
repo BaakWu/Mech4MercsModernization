@@ -231,6 +231,27 @@ rejects the device. A broken `options.ini` (section 4.1 of AGENTS.md) is one
 way to get there; others are a missing GPU driver ("Microsoft Basic Display
 Adapter"), Remote Desktop or a virtual machine, and the setup's own checks.
 
+**NVIDIA: the game's own `imagehlp.dll` (the cause on NVIDIA, #35).** On two
+NVIDIA desktops (RTX 3090, RTX 5080) every hardware surface the device check
+tried failed with `DDERR_NODIRECTDRAWHW` (`0x88760233`), so GameOS found no
+hardware 3D device (`devcaps 0x00000000`) and showed the dialog; DxDiag still
+reported DirectDraw and Direct3D acceleration as enabled. A player fixed it by
+renaming `Assets\Binaries\imagehlp.dll` (2003). GameOS loads that file by
+full path with `LoadLibraryA` (import slot `0x00782230`, at `0x00734ABE`, in
+its debug-helper setup `0x00735430`, after it loads `dbghelp.dll`) and falls
+back to `imagehlp.dll` from a second folder (`0x00734B24`) when that fails.
+With the old copy in the process, later loads of `imagehlp.dll` bind to it,
+and NVIDIA's display driver then does not bring up its DirectDraw/Direct3D
+hardware path. The patch changes no game file, so `imagehlp.cpp` detours
+KernelBase's `LoadLibraryA` from DllMain (before GameOS runs; the packed
+executable fills its imports late) and refuses only
+`...\assets\binaries\imagehlp.dll` (`ERROR_MOD_NOT_FOUND`). GameOS then takes
+its fallback, Windows' `imagehlp.dll`, as after the rename. Log: `imagehlp:
+not loading the game's own imagehlp.dll; Windows' is used instead`. Verified
+in-process through GameOS' own import slot (the game's copy refused with
+error 126, Windows' copy loaded); the dev PC's AMD path never reaches that
+setup, so the NVIDIA result rests on the player's rename test.
+
 **Texture memory test (skipped).** The hardware setup rejects a card whose
 local + AGP video memory (record `+0x10AC` + `+0x10B0`, from DirectDraw) is
 below the game's minimum of `0x1400` KB (5 MB, set at `0x0040B3BC`):

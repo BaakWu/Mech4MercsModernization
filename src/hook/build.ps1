@@ -41,6 +41,7 @@ $sources = @(
     'dllmain.cpp',
     'input_probe.cpp',
     'iat.cpp',
+    'imagehlp.cpp',
     'log.cpp',
     'shellscript.cpp',
     'window.cpp'

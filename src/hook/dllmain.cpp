@@ -167,6 +167,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         }
         mw4hook::LogInit(instance);
         mw4hook::Log("dllmain: process attach\n");
+        mw4hook::InstallImagehlpRedirect();
         EnableDpiAwareness();
         mw4hook::ResolveDinputExports();
         mw4hook::DisplayInit();

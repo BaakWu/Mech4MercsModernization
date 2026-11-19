@@ -98,6 +98,9 @@ const char* InputDeviceBlocked(const GUID& instance);  // reason, or null
 void InputOpenBegin(const GUID& instance, const char* name);
 void InputOpenEnd(const GUID& instance);
 
+// Refuse the game's own Assets\Binaries\imagehlp.dll (imagehlp.cpp, #35).
+void InstallImagehlpRedirect();
+
 // MW5-style keyboard driving (controls.cpp).
 bool InstallControlsHooks();
 bool ThrottleDecayEnabled();
