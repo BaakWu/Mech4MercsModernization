@@ -41,9 +41,43 @@ memory after the PECompact stub has unpacked the image.
   The options screen has no Cancel (OK always saves); the Video tab's
   **Reset** button restores the resolution *and* the Windowed setting to their
   values from when the tab was opened.
-- Sizes larger than the monitor (the 3.1c list goes up to 5040x1050): in a
-  framed window the window is shrunk to fit the work area with the aspect
-  kept; the game still renders at the chosen size and the picture is scaled.
+- Sizes larger than the monitor: in a framed window the window is shrunk to
+  fit the work area with the aspect kept; the game still renders at the
+  chosen size and the picture is scaled.
+- **The list stops at 1920x1200** (issue #38). 3.1c's own list has 29
+  sizes, up to 2560x1600, 3840x2400 and three monitor-spanning sizes
+  (3072x768, 4320x900, 5040x1050). None of those can be played; each one
+  crashed or hung the game at the next mission start:
+  - **Direct3D 7 caps the render size at 2048 px.** `IDirect3D7::CreateDevice`
+    in Windows' own `d3dim700.dll` (10.0.26100.5074, at `0x1000536C`) compares
+    the render target's width and height with `0x800` and returns
+    `DDERR_INVALIDOBJECT` (`0x88760082`) above it, whatever the card
+    reports (16384x16384 on the test Radeon). GameOS then crashes. A
+    standalone probe confirmed it: 2048x2048 works, 2049x1080 and 1080x2049
+    fail.
+  - **The HUD only knows certain screen heights.**
+    `HUDNumberText::GetIndex` (`0x00563A70`) picks the HUD's number font by
+    screen height. It knows 480, 600, 720, 768, 800, 854, 864, 900, 960,
+    1024, 1050, 1080, 1200, 1536, 1600 and 2400. Any other height (1152,
+    1440, 1800, 2160) raises "unknown screen size in HUDNumberText::GetIndex"
+    through the game's error dialog, which never shows, so the mission load
+    waits forever.
+  - **2048x1536 also stops on the loading screen**, although Direct3D accepts
+    it (cause not found).
+
+  So after the game fills the list (ShellGetSupportedResolutions, shell
+  callback 124, `0x0051CD50`), the hook rewrites it in place with the other 23
+  sizes and maps the rows to them. Rows that fit the primary monitor are
+  white and larger ones red; under the patch the game's own check (a
+  fullscreen display mode) had made every row red. A saved size that cannot
+  be played (an older `options.ini`) is replaced at startup by the listed
+  size of the closest shape that fits inside it (2560x1600 → 1920x1200,
+  3840x2160 → 1920x1080), and saved on the next OK. **On a larger monitor,
+  Windowed off (borderless) scales the mission to fill the screen.**
+- Verified (2026-11-21, 2560x1440 monitor): the list ends at 1920x1200, all
+  rows white. An `options.ini` with 2560x1600, which crashed before, started
+  at 1920x1200 and played a mission at about 200 fps. Choosing 1600x1200 and
+  OK saved `screenwidth=1600` / `screenheight=1200`.
 - **Never 16-bit:** 16-bit requests are raised to 32-bit, and the 16-bit
   fallbacks in GameOS' (now unused) fullscreen setup are raised to 32-bit.
 - DPI: the process opts out of DPI virtualization, so one game pixel is one

@@ -234,7 +234,14 @@ Relevant oracle functions:
 - `FUN_0061A510` loads the `Resolution` option for the options UI.
 
 The first release should make this existing menu work correctly on modern
-Windows first. Extending the list beyond 1600x1200 is a later change.
+Windows first.
+
+3.1c's list has 29 sizes (up to 2560x1600, 3840x2400 and three spanning
+sizes). Decided 2026-11-21 (issue #38): nothing above 1920x1200 can be
+played. Direct3D 7 (Windows' `d3dim700.dll`) refuses render targets over
+2048 px, and the HUD only knows certain screen heights (no 1440 / 2160). The
+hook lists the 23 playable sizes and replaces a saved unplayable one; large
+monitors use Windowed off, which scales the picture (`docs/HOOK.md`).
 
 ### 4.4 The decompilation is a different binary
 
@@ -543,8 +550,8 @@ High-value files:
   raised to 32-bit.
 - Investigate the Resolution dropdown selecting index 0 after scrolling (it
   reproduces with the display hooks disabled).
-- Decide whether the in-game resolution list should be extended beyond
-  1600x1200.
+- Find why a 2048x1536 mission stops on its loading screen (Direct3D accepts
+  that size; it is off the list since issue #38).
 
 ## 10. Definition of done for the first release
 

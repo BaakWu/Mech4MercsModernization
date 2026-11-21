@@ -35,6 +35,7 @@
 //   screenwidth/screenheight the selected resolution (existing keys)
 #include "hook.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -50,7 +51,36 @@ constexpr int kShellSaveOptions = 51;
 constexpr int kShellCreateNewPilot = 18;
 constexpr int kShellSelectPilot = 19;
 constexpr int kShellRenamePilot = 21;
+constexpr int kShellGetSupportedResolutions = 124;
 constexpr int kResolutionCount = 29;
+constexpr int kTextTypeNormal = 0;    // listboxes.script TEXT_TYPE_NORMAL (white)
+constexpr int kTextTypeSpecial2 = 5;  // TEXT_TYPE_SPECIAL2 (red), the game's "unsupported"
+
+// Options > Video > Screen Resolution (issue #38). The game fills the list
+// from a fixed table of 29 sizes (0x0081DCC0) and the 29 labels built from it
+// at startup. Six of them cannot be played; choosing one crashed or hung the
+// game at the next mission start:
+//   - 2560x1600, 3840x2400, 3072x768, 4320x900, 5040x1050: Direct3D 7's
+//     CreateDevice (d3dim700.dll, Windows' own runtime) refuses a render
+//     target wider or taller than 2048 (mov eax,800h; cmp; ja ->
+//     DDERR_INVALIDOBJECT), whatever the card reports (16384 here); GameOS
+//     then crashes.
+//   - 2048x1536: the device is made, but the mission load stops on the
+//     loading screen (cause not found).
+// Nor can sizes outside the game's list be added: HUDNumberText::GetIndex
+// (0x00563A70) only knows the screen heights 480, 600, 720, 768, 800, 854,
+// 864, 900, 960, 1024, 1050, 1080, 1200, 1536, 1600 and 2400; any other
+// (1152, 1440, 1800, 2160) raises a game error whose dialog never shows, and
+// the mission load waits for it forever.
+// So the list offers the other 23 sizes, in the game's order. For a large
+// monitor, Windowed off (borderless) scales the mission to fill the screen.
+constexpr int kListCount = 23;
+constexpr DWORD kResolutions[kListCount * 2] = {
+    640,  480,  800,  600,  960,  600,  1024, 768,  1152, 768,  1152, 864,
+    1280, 720,  1280, 768,  1280, 800,  1280, 854,  1280, 960,  1280, 1024,
+    1360, 768,  1366, 768,  1400, 1050, 1440, 900,  1440, 960,  1600, 900,
+    1600, 1024, 1600, 1200, 1680, 1050, 1920, 1080, 1920, 1200,
+};
 
 using SetScreenMode_t = void(__stdcall*)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
                                          DWORD, DWORD, DWORD, DWORD, DWORD, DWORD);
@@ -68,7 +98,11 @@ volatile BYTE* g_arg7 = nullptr;
 volatile BYTE* g_fullscreen = nullptr;
 volatile DWORD* g_mission_width = nullptr;    // the game's own selected size
 volatile DWORD* g_mission_height = nullptr;
-const DWORD* g_resolutions = nullptr;         // 29 (width, height) pairs
+// The (width, height) pairs behind the dropdown's rows: the game's table (29),
+// or kResolutions (kListCount) once the hook has written the list
+// (ListResolutions).
+const DWORD* g_resolutions = nullptr;
+int g_resolution_count = kResolutionCount;
 
 bool g_windowed = true;
 int g_sel_width = 1024;
@@ -116,13 +150,106 @@ int ResolutionIndex(int w, int h) {
     if (!g_resolutions) {
         return -1;
     }
-    for (int i = 0; i < kResolutionCount; ++i) {
+    for (int i = 0; i < g_resolution_count; ++i) {
         if (static_cast<int>(g_resolutions[i * 2]) == w &&
             static_cast<int>(g_resolutions[i * 2 + 1]) == h) {
             return i;
         }
     }
     return -1;
+}
+
+bool Playable(int w, int h) {
+    for (int i = 0; i < kListCount; ++i) {
+        if (static_cast<int>(kResolutions[i * 2]) == w &&
+            static_cast<int>(kResolutions[i * 2 + 1]) == h) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A size the game cannot play (one of the six removed from the list, from an
+// older options.ini) is replaced by the listed size of the closest shape
+// that fits inside it, the largest of those (2560x1600 -> 1920x1200,
+// 3840x2160 -> 1920x1080, 2048x1536 -> 1600x1200, 5040x1050 -> 1600x900).
+void PlayableSize(int* w, int* h) {
+    if (Playable(*w, *h)) {
+        return;
+    }
+    const double aspect = static_cast<double>(*w) / *h;
+    int best = -1;
+    double best_diff = 0.0;
+    for (int i = 0; i < kListCount; ++i) {
+        const int cw = static_cast<int>(kResolutions[i * 2]);
+        const int ch = static_cast<int>(kResolutions[i * 2 + 1]);
+        if (cw > *w || ch > *h) {
+            continue;
+        }
+        const double diff = std::fabs(static_cast<double>(cw) / ch - aspect);
+        const bool closer = best < 0 || diff < best_diff - 0.01;
+        const bool same_but_larger =
+            best >= 0 && std::fabs(diff - best_diff) <= 0.01 &&
+            cw * ch > static_cast<int>(kResolutions[best * 2] * kResolutions[best * 2 + 1]);
+        if (closer || same_but_larger) {
+            best = i;
+            best_diff = diff;
+        }
+    }
+    if (best < 0) {
+        best = 3;  // 1024x768
+    }
+    Log("display: %dx%d cannot be played (see display.cpp); using %lux%lu\n", *w, *h,
+        kResolutions[best * 2], kResolutions[best * 2 + 1]);
+    *w = static_cast<int>(kResolutions[best * 2]);
+    *h = static_cast<int>(kResolutions[best * 2 + 1]);
+}
+
+// Runs after the game's ShellGetSupportedResolutions (0x0051CD50) has filled
+// the Video tab's list: args[1] = list_item[] (one char* per row; the
+// handler gives each row a private 128-byte string), args[2] =
+// list_item_type[], args[3] = the row count (29; the script sets the list's
+// length from it). Writes kResolutions' labels, in the game's "W x H" form,
+// their types and their count into it. The game shows a row in red unless
+// GameOS reports it as a fullscreen display mode, which under the patch
+// failed for every row; the patch never changes the display mode, so a row
+// is white when it fits on the primary monitor and red when the picture is
+// scaled down to fit (any row can still be chosen, as before).
+bool ListResolutions(const int* args) {
+    __try {
+        char** items = reinterpret_cast<char**>(args[1]);
+        int* types = reinterpret_cast<int*>(args[2]);
+        int* count = reinterpret_cast<int*>(args[3]);
+        if (!items || !types || !count || *count != kResolutionCount) {
+            return false;
+        }
+        for (int i = 0; i < kListCount; ++i) {
+            if (!items[i] || IsBadWritePtr(items[i], 16)) {
+                return false;
+            }
+        }
+        const DWORD screen_w = static_cast<DWORD>(GetSystemMetrics(SM_CXSCREEN));
+        const DWORD screen_h = static_cast<DWORD>(GetSystemMetrics(SM_CYSCREEN));
+        int fit = 0;
+        for (int i = 0; i < kListCount; ++i) {
+            const DWORD w = kResolutions[i * 2];
+            const DWORD h = kResolutions[i * 2 + 1];
+            sprintf_s(items[i], 16, "%lu x %lu", w, h);
+            const bool fits = w <= screen_w && h <= screen_h;
+            types[i] = fits ? kTextTypeNormal : kTextTypeSpecial2;
+            fit += fits ? 1 : 0;
+        }
+        *count = kListCount;
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            Log("display: resolution list written (%d sizes, %d fit the %lux%lu monitor)\n",
+                kListCount, fit, screen_w, screen_h);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 void SyncGameSelectedSize() {
@@ -230,6 +357,18 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
         Log("controls: callback %d args %s %s %s %s\n", cmd, show(args[1]), show(args[2]),
             show(args[3]), show(args[4]));
     }
+    if (cmd == kShellGetSupportedResolutions && args) {
+        // The tab asks for the list before it reads the selection, so the
+        // index below already maps onto these rows.
+        const int result = g_shell_callback(a1, a2, args);
+        if (ListResolutions(args)) {
+            g_resolutions = kResolutions;
+            g_resolution_count = kListCount;
+        } else {
+            Log("display: resolution list not as expected; the game's list is kept\n");
+        }
+        return result;
+    }
     if ((cmd == kShellGetOptionValue || cmd == kShellSetOptionValue) && args[2]) {
         const int option = args[1];
         int* value = reinterpret_cast<int*>(args[2]);
@@ -298,9 +437,10 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
             CallOriginal(a1, a2, kShellSetOptionValue, kMwoUseExtendedVisibility, &extended);
             const int index = *value;
             Log("display: script sets Resolution = index %d\n", index);
-            if (index >= 0 && index < kResolutionCount) {
-                const int w = static_cast<int>(g_resolutions[index * 2]);
-                const int h = static_cast<int>(g_resolutions[index * 2 + 1]);
+            if (index >= 0 && index < g_resolution_count) {
+                int w = static_cast<int>(g_resolutions[index * 2]);
+                int h = static_cast<int>(g_resolutions[index * 2 + 1]);
+                PlayableSize(&w, &h);  // the game's own list, if the hook's is not in use
                 if (SaneSize(w, h) && (w != g_sel_width || h != g_sel_height)) {
                     g_sel_width = w;
                     g_sel_height = h;
@@ -592,6 +732,7 @@ void DisplayInit() {
     int h = static_cast<int>(GetPrivateProfileIntW(L"graphics options", L"screenheight",
                                                    768, g_options_path));
     if (SaneSize(w, h)) {
+        PlayableSize(&w, &h);  // saved on the next OK in Options
         g_sel_width = w;
         g_sel_height = h;
     }

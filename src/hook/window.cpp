@@ -157,7 +157,7 @@ Layout ComputeLayout(HWND hwnd) {
     SelectedSize(&client_w, &client_h);
     layout.style = g_framed_style | WS_VISIBLE;
     SIZE outer = OuterSize(layout.style, client_w, client_h);
-    // Sizes larger than the monitor (the list goes up to 5040x1050): shrink
+    // Sizes larger than the monitor (up to 1920x1200, issue #38): shrink
     // the window to fit the work area, aspect kept. The game still renders
     // at the selected size; the ddraw proxy scales the picture into the
     // smaller window.
