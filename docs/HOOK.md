@@ -418,6 +418,12 @@ The probe measures the same thing before the game sees it; if the controllers
 cannot even be listed on their own, the game gets the keyboard and mouse only
 and the log says why (`input: the controllers cannot be listed safely ...`).
 
+Gamepads are controllers too: the Xbox 360 Controller for Windows enumerates
+as `DIDEVTYPE_JOYSTICK` (subtype gamepad, `00010404`) and is listed next to
+the joystick in Options > Controls. The filter is by DirectInput device type,
+not by vendor or model, so any joystick, gamepad or wheel is offered; the
+headset/microphone collections stay in `DIDEVTYPE_DEVICE` and are not.
+
 ### Direct3D: per-frame display rebuild, depth buffer
 
 Found 2026-11-16 by A/B with all display features disabled (the stock game
@@ -650,6 +656,13 @@ It works with the game's other torso controls:
 - **Torso keys** (held counters `+0x464`..`+0x470`) and **Center Torso**
   (`+0x6D0`) drive the torso as usual. The aim point follows the torso while
   they are in use.
+- **The joystick's Y (pitch) and Z (twist) axes** drive the same commands.
+  While either axis is moved, the hook leaves that command alone instead of
+  replacing it with the aim steering, and moves the aim point to the torso,
+  so the stick pitches and twists as usual; with the stick centered the
+  mouse aim takes over again. Before this the aim code replaced `+0x2E0`
+  every frame, so a joystick could not look up or down while the aim point
+  was in use (the default with the installer's MW5 controls).
 - Turning the legs (A/D) carries the aim point along, as in the stock game,
   unless Gyro Aim is on (below).
 

@@ -312,6 +312,25 @@ void AimAfterDrive(char* self, double now) {
     }
     const float yaw = At<float>(torso, kTorsoYaw);
     const float pitch = At<float>(torso, kTorsoPitch);
+    // The commands the game's own input step left this frame (keys, and the
+    // joystick if it drives them); aim mode replaces them below. The drive
+    // step recomputes them every frame, so a nonzero value here is a held
+    // key or a moved joystick axis, not last frame's aim.
+    const float input_yaw = At<float>(self, kYawCmd);
+    const float input_pitch = At<float>(self, kPitchCmd);
+    // A joystick Y (pitch) or Z (twist) axis moves the torso through the
+    // game's own command. Let that axis through; the aim point follows the
+    // torso while the stick is moved (issue #40 follow-up: the mouse aim used
+    // to replace the command, so the joystick could not pitch).
+    const bool game_pitch = std::fabs(input_pitch) > 1e-4f;
+    const bool game_yaw = std::fabs(input_yaw) > 1e-4f;
+    static bool pitch_logged = false;
+    if (game_pitch && !pitch_logged) {
+        pitch_logged = true;
+        Log("aim: joystick pitch %+.2f: the game drives pitch, the aim follows\n", input_pitch);
+    } else if (!game_pitch) {
+        pitch_logged = false;
+    }
     double dt = g.torso == torso ? now - g.last_now : 0.0;
     if (dt < 0.0 || dt > 0.25) {
         dt = 0.0;
@@ -469,17 +488,36 @@ void AimAfterDrive(char* self, double now) {
             move_yaw_target(feed_forward * g.yaw.rate * static_cast<float>(dt), yaw);
         }
     }
-    const float yaw_cmd = Clamp(
-        feed_forward + Steer(g.yaw, steer_yaw, At<float>(torso, kTorsoYawRate), dt), -1.0f, 1.0f);
-    At<float>(self, kYawCmd) = yaw_cmd;
-    float pitch_cmd = At<float>(self, kPitchCmd);
-    if (pitch_by_mouse) {
+    float yaw_cmd = input_yaw;
+    if (game_yaw) {
+        // The joystick (or a key) is twisting the torso: leave its command
+        // alone and keep the aim point on the torso.
+        g.yaw.target = yaw;
+        g.yaw.last_angle = yaw;
+        g.yaw.last_applied = 0.0f;
+        g.marker_yaw = 0.0f;
+    } else {
+        yaw_cmd = Clamp(feed_forward + Steer(g.yaw, steer_yaw, At<float>(torso, kTorsoYawRate), dt),
+                        -1.0f, 1.0f);
+        At<float>(self, kYawCmd) = yaw_cmd;
+        g.marker_yaw = limits.full_turn ? WrapAngle(g.yaw.target - steer_yaw)
+                                        : g.yaw.target - steer_yaw;
+    }
+    float pitch_cmd = input_pitch;
+    if (game_pitch) {
+        // The joystick's Y axis is pitching: leave its command alone and keep
+        // the aim point on the torso, so releasing the stick holds the aim.
+        g.pitch.target = pitch;
+        g.pitch.last_angle = pitch;
+        g.pitch.last_applied = 0.0f;
+        g.marker_pitch = 0.0f;
+    } else if (pitch_by_mouse) {
         pitch_cmd = Steer(g.pitch, pitch, At<float>(torso, kTorsoPitchRate), dt);
         At<float>(self, kPitchCmd) = pitch_cmd;
+        g.marker_pitch = g.pitch.target - pitch;
+    } else {
+        g.marker_pitch = 0.0f;
     }
-    g.marker_yaw = limits.full_turn ? WrapAngle(g.yaw.target - steer_yaw)
-                                    : g.yaw.target - steer_yaw;
-    g.marker_pitch = pitch_by_mouse ? g.pitch.target - pitch : 0.0f;
     g.marker_tick = GetTickCount();
 
     if (GetConfig().debug_automation) {
@@ -487,9 +525,10 @@ void AimAfterDrive(char* self, double now) {
         if (dx != 0.0f || dy != 0.0f || now - logged >= 0.05) {
             logged = now;
             Log("aim: t=%.3f d=%+.0f,%+.0f target=%+.4f,%+.4f torso=%+.4f,%+.4f cmd=%+.3f,%+.3f "
-                "rate=%.2f,%.2f limit=%.4f,%.4f%s%s heading=%+.4f world=%+.4f gyro=%d\n",
+                "in=%+.3f,%+.3f rate=%.2f,%.2f limit=%.4f,%.4f%s%s heading=%+.4f world=%+.4f "
+                "gyro=%d\n",
                 now, dx, dy, g.yaw.target, g.pitch.target, yaw, pitch, yaw_cmd, pitch_cmd,
-                g.yaw.rate, g.pitch.rate, twist_limit, pitch_limit,
+                input_yaw, input_pitch, g.yaw.rate, g.pitch.rate, twist_limit, pitch_limit,
                 limits.full_turn ? " full_turn" : "", limits.from_data ? "" : " (fallback)",
                 g.heading, WrapAngle(g.heading + yaw), gyro ? 1 : 0);
         }
