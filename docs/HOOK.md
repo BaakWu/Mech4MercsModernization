@@ -430,9 +430,11 @@ expects a joystick. The `GetDeviceState` hook rebuilds the buffer for a
 `DIDEVTYPEJOYSTICK_GAMEPAD` device (the Xbox 360 pad is subtype 4):
 
 - left stick X stays X: Turn Left/Right, as in MW5;
-- right stick Y goes to the game's Y (pitch). The right stick's X is already
-  Rx, the axis the game's torso function reads; it is **not** copied into Z
-  (the left trigger), which also drives the stock throttle;
+- the stock pad axes for pitch/torso/throttle are neutralised: on this pad
+  **Z and Rx both drive the game's throttle**, so feeding the right stick into
+  either made it accelerate as well as twist. The drive hook writes the torso
+  **yaw/pitch rate commands** directly instead: right stick X twists right /
+  left, right stick Y pitches up / down;
 - the left stick's Y is not given to the game as an axis. The drive hook reads
   it and sets the game's Accelerate/Decelerate held counters, so the throttle
   ramps and holds like W/S, and Throttle Decay works. Centered leaves the

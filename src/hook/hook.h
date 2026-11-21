@@ -105,6 +105,9 @@ void InputOpenEnd(const GUID& instance);
 // and its left stick Y is the throttle (read by the drive hook).
 void SetGamepadThrottle(int value);  // -1000..1000
 int GamepadThrottle();
+void SetGamepadAxes(int right_x, int right_y);  // -1000..1000
+int GamepadRightX();
+int GamepadRightY();
 
 // Refuse the game's own Assets\Binaries\imagehlp.dll (imagehlp.cpp, #35).
 void InstallImagehlpRedirect();

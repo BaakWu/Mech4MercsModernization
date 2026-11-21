@@ -39,7 +39,9 @@ constexpr size_t kMinReverse = 0x650;      // float, smallest reverse throttle (
 constexpr float kRampFactor = 2.0f;        // W/S speed multiplier
 constexpr double kDecayTau = 0.35;         // reverse decay time constant, s
 constexpr float kSnap = 0.02f;             // below this the throttle is 0
-constexpr int kGamepadDeadzone = 250;      // left stick Y, -1000..1000 (#42)
+constexpr int kGamepadDeadzone = 250;      // stick, -1000..1000 (#42)
+constexpr size_t kYawCmd = 0x2E4;          // torso twist rate command
+constexpr size_t kPitchCmd = 0x2E0;        // torso pitch rate command
 
 using Drive_t = void(__thiscall*)(void*, double);
 Drive_t g_drive = nullptr;
@@ -148,6 +150,25 @@ void __fastcall Hook_Drive(char* self, void*, double now) {
     *reinterpret_cast<float*>(self + kStoredThrottle) = t;
     g_last_written = t;
     g_have_last = true;
+
+    // Gamepad torso (issue #42): drive the rate commands directly from the
+    // right stick. The stock axis mapping is off for a gamepad (Z/Rx also
+    // drive the throttle), so this is what makes right stick X twist and Y
+    // pitch. The aim point follows through AimAfterDrive below.
+    if (GetConfig().input_gamepad_layout) {
+        const int right_x = GamepadRightX();
+        const int right_y = GamepadRightY();
+        if (right_x > kGamepadDeadzone || right_x < -kGamepadDeadzone) {
+            *reinterpret_cast<float*>(self + kYawCmd) =
+                -static_cast<float>(right_x) / 1000.0f;
+        }
+        if (right_y > kGamepadDeadzone || right_y < -kGamepadDeadzone) {
+            // Right stick up looks up, down looks down (the stick's raw Y is
+            // positive up on this pad; the yaw above stays as it is).
+            *reinterpret_cast<float*>(self + kPitchCmd) =
+                static_cast<float>(right_y) / 1000.0f;
+        }
+    }
 
     // Mouse aim point (aim.cpp): after the game's torso keys and centering.
     AimAfterDrive(self, now);

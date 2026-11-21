@@ -144,6 +144,8 @@ bool IsGamepadObject(void* object) {
 }
 
 volatile LONG g_gamepad_throttle = 0;
+volatile LONG g_gamepad_right_x = 0;
+volatile LONG g_gamepad_right_y = 0;
 
 void PatchDevice(void* device, bool gamepad);
 
@@ -153,13 +155,26 @@ HRESULT WINAPI Hook_GetDeviceState(void* self, DWORD size, void* data) {
     HRESULT result = original(self, size, data);
     if (mw4hook::GetConfig().input_gamepad_layout && IsGamepadObject(self)) {
         if (SUCCEEDED(result) && data && (size == 80 || size == 272)) {
-            // The game's pitch is Y; an Xbox-style pad's right stick Y is Ry.
-            // Its right stick X is already Rx, which is the axis the game's
-            // torso function uses; do not copy it into Z (the left trigger),
-            // which also drives the stock throttle (issue #42 follow-up).
+            // MW5 sticks in the axes the game uses: X = turn, Y = pitch,
+            // Z = torso twist. The pad's right stick is Rx/Ry. The stock
+            // throttle also reads Rx, so leaving the right stick X there
+            // made it change the throttle as well; neutralise Rx and let the
+            // left stick Y counters drive the throttle (issue #42 follow-up).
             LONG* axes = static_cast<LONG*>(data);
-            mw4hook::SetGamepadThrottle(static_cast<int>(axes[1]));
-            axes[1] = axes[4];  // right stick Y -> pitch
+            const LONG left_y = axes[1];
+            const LONG right_x = axes[3];
+            const LONG right_y = axes[4];
+            mw4hook::SetGamepadThrottle(static_cast<int>(left_y));
+            mw4hook::SetGamepadAxes(static_cast<int>(right_x), static_cast<int>(right_y));
+            // The stock mapping's pitch/torso/throttle axes conflict on a
+            // gamepad (Z and Rx both drive the throttle). Leave only X for
+            // the legs; the drive hook writes the torso commands directly
+            // from the right stick (issue #42 follow-up).
+            axes[1] = 0;
+            axes[2] = 0;
+            axes[3] = 0;
+            axes[4] = 0;
+            axes[5] = 0;
         } else if (FAILED(result)) {
             mw4hook::SetGamepadThrottle(0);
         }
@@ -610,6 +625,19 @@ void SetGamepadThrottle(int value) {
 
 int GamepadThrottle() {
     return static_cast<int>(InterlockedCompareExchange(&g_gamepad_throttle, 0, 0));
+}
+
+void SetGamepadAxes(int right_x, int right_y) {
+    InterlockedExchange(&g_gamepad_right_x, right_x);
+    InterlockedExchange(&g_gamepad_right_y, right_y);
+}
+
+int GamepadRightX() {
+    return static_cast<int>(InterlockedCompareExchange(&g_gamepad_right_x, 0, 0));
+}
+
+int GamepadRightY() {
+    return static_cast<int>(InterlockedCompareExchange(&g_gamepad_right_y, 0, 0));
 }
 
 void ResolveDinputExports() {
