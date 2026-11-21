@@ -543,9 +543,22 @@ step (which computes the torso keys and auto-centering), the hook:
 - moves the aim point by motion × sensitivity × 0.116 rad per slider unit
   (`[aim] sensitivity` multiplies it), in the same directions as the stock
   mouse, including the game's Y invert;
-- clamps it to the mech's own twist and pitch limits (`mech+0x76C`,
-  `mech+0x7C8`; ±80° / ±30° on the test mech), so it **stops at the limit**
-  and nothing piles up beyond it;
+- clamps it to the mech's own twist and pitch limits, so it **stops at the
+  limit** and nothing piles up beyond it. The limits are the ones the game's
+  torso update (`0x005F3C30`) clamps with: it gets the 'Mech's torso data
+  from the torso state's sub-object at `+0x78` (virtual `[1]`, no
+  arguments) and clamps the yaw / pitch to ±`+0x63C` / ±`+0x640` (twist /
+  pitch rate at `+0x634` / `+0x638`). Measured: Vulture 2π / 50°,
+  Hunchback 120° / 50°. Until issue #37 the hook read `mech+0x76C` /
+  `mech+0x7C8`, which hold 80° / 30° on both, so every 'Mech's aim point
+  stopped at 80° / 30° (they remain the fallback if the torso data cannot
+  be read);
+- **a torso that turns all the way round** (twist limit ≥ π, the Vulture):
+  the update wraps the yaw to ±π (`0x00420FB0`) before it clamps, so such a
+  limit never stops the torso. The aim point then has no limit either. It
+  wraps like the yaw and may lead the torso by at most π − 0.05 either way,
+  so the way round is never in doubt and spinning the mouse does not pile
+  up turns for the torso to catch up on;
 - steers the torso (`+0x2E4` yaw, `+0x2E0` pitch) with
   `clamp((target - angle) / (rate × τ), ±1)`. That is full rate while far
   away, then proportional, so there is no overshoot. τ = max(2 frames, 60 ms).
@@ -615,8 +628,8 @@ its direction in the world:
   from the last frame (0.957 rad/s on the test Archer, the same at every
   command and frame time).
 - At the twist limit the aim point stops and the torso is carried with the
-  legs. With Gyro Aim on, this also replaces the auto-centering compensation
-  above.
+  legs (a torso that turns all the way round never reaches one). With Gyro
+  Aim on, this also replaces the auto-centering compensation above.
 - Mouse aiming still twists at the mech's own rate.
 
 A first version used a counter-rotation *command* instead. That is capped at
@@ -682,6 +695,17 @@ Verified in Tharkad - Checkmate (fresh extraction, `track_pointer=1`):
 | 3000 counts left | aim point stops at +1.3963 (the limit); 1200 back lands at 0.0043 |
 | pitch, 2000 counts | stops at −0.5236 (the limit) |
 | 20° flick | compass 4° → 23°; marker shown while turning |
+
+Twist limits (issue #37, 2026-11-20, Instant Action, Eaton - Merc Alley):
+
+| Test | Result |
+|---|---|
+| Vulture, stock torso keys (before the fix) | the torso turns all the way round, yaw wrapping at ±π; the torso data reads 6.2832 / 0.8727, `mech+0x76C` 1.3963 |
+| Vulture, 30000 counts left | the torso turned left past ±π and stopped on the aim point 4.65 rad (266°) from the start; the aim point led by at most π − 0.05 |
+| Vulture, 1500 counts right | turned right across −π, stopped on target (+2.91) |
+| Vulture, pitch | stops at −0.8727 (50°; was 30°) |
+| Vulture, Gyro Aim, A held 7 s | the legs turned more than a full circle; the torso's world direction held at −2.2857 throughout |
+| Hunchback, 30000 counts left / pitch | stops at +2.0944 (120°; was 80°) / −0.8727 |
 
 ### Default camouflage for new pilots (`[mechlab] default_camo`; issue #19)
 

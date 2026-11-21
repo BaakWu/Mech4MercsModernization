@@ -10,8 +10,10 @@
 // to the legs, resolution independent. The torso turns toward it at the
 // mech's own twist rate and stops on it, so a movement of the same size
 // lands in the same place however fast it was made. The aim point stops at
-// the mech's twist / pitch limits. Turning the legs carries it along, as in
-// the stock game. Torso keys and Center Torso keep working; the aim point
+// the mech's twist / pitch limits; on a torso that turns all the way round
+// (Vulture) it keeps going, at most half a turn ahead of the torso. Turning
+// the legs carries it along, as in the stock game. Torso keys and Center
+// Torso keep working; the aim point
 // follows the torso while they are used. Aiming never turns the 'Mech: the
 // game's automatic centering (options.ini autotorsocenter: the legs turn
 // toward the torso after a delay) is off in aim mode (issue #31; controls.cpp
@@ -41,7 +43,18 @@
 //     +0x440           vector; element 0 is the torso state:
 //                        +0x19C / +0x1A0  torso yaw / pitch (rad, + = left / up)
 //                        +0x1CC / +0x1D0  applied yaw / pitch rate (-1..1)
-//     +0x76C / +0x7C8  float  twist / pitch limit (rad, symmetric)
+//                        +0x78            sub-object; virtual [1] returns the
+//                                         'Mech's torso data (below)
+//   Torso data (the torso update 0x005F3C30 clamps with these, issue #37):
+//     +0x634 / +0x638  float  twist / pitch rate (rad/s)
+//     +0x63C / +0x640  float  twist / pitch limit (rad, symmetric). The
+//                      update wraps the yaw to +-pi first, so a twist limit
+//                      of pi or more never clamps: the torso turns all the
+//                      way round (2pi on the Vulture).
+//   Measured: Vulture 2pi / 50 degrees, Hunchback 120 / 50 degrees.
+//   (mech +0x76C / +0x7C8, read before #37, hold 80 / 30 degrees on both,
+//   so every 'Mech's aim point stopped there; used only if the torso data
+//   cannot be read.)
 //   Mouse step +0x22E: cmp byte [mousey], 0 -- options.ini [special commands]
 //               mousey: mouse Y pitches the torso.
 #include "hook.h"
@@ -65,10 +78,13 @@ constexpr size_t kCentering = 0x6D0;
 constexpr size_t kLegsTurnCmd = 0x2DC;  // legs' turn rate command (-1..1, + = left)
 constexpr size_t kMech = 0x38C;
 constexpr size_t kMechParts = 0x440;
-constexpr size_t kTwistLimit = 0x76C;
+constexpr size_t kMechTwistLimit = 0x76C;  // fallback only, see above
+constexpr size_t kMechPitchLimit = 0x7C8;
+constexpr size_t kTorsoData = 0x78;  // sub-object; virtual [1] returns the torso data
+constexpr size_t kDataTwistLimit = 0x63C;
+constexpr size_t kDataPitchLimit = 0x640;
 constexpr size_t kHeadingCos = 0xF4;
 constexpr size_t kHeadingSin = 0xFC;
-constexpr size_t kPitchLimit = 0x7C8;
 constexpr size_t kTorsoYaw = 0x19C;
 constexpr size_t kTorsoPitch = 0x1A0;
 constexpr size_t kTorsoYawRate = 0x1CC;
@@ -82,6 +98,11 @@ constexpr float kDefaultRate = 0.9f;  // rad/s at full command, until measured
 // Closer than this to the aim point counts as on it (rad; one pixel at
 // 1024x768 is about 0.0009 rad).
 constexpr float kOnTarget = 0.0005f;
+constexpr float kPi = 3.14159265f;
+// A torso that turns all the way round: the aim point may lead the torso by
+// at most this much (just under half a turn, so the way round is never in
+// doubt), so it does not pile up turns the torso then has to catch up on.
+constexpr float kMaxLead = kPi - 0.05f;
 
 using MouseStep_t = void(__thiscall*)(void*, double);
 MouseStep_t g_mouse_step = nullptr;
@@ -168,13 +189,16 @@ void __fastcall Hook_MouseStep(char* self, void*, double now) {
     g_mouse_step(self, now);
 }
 
+float WrapAngle(float a);
+
 // Rate command that brings `angle` to `axis.target` without overshoot: full
 // rate while far away, then proportional, reaching it in about tau.
 float Steer(Axis& axis, float angle, float applied, double dt) {
     if (dt > 0.0 && std::fabs(axis.last_applied) > 0.3f) {
-        // Learn the mech's rate from the last frame's response.
-        const float observed =
-            std::fabs((angle - axis.last_angle) / static_cast<float>(dt) / axis.last_applied);
+        // Learn the mech's rate from the last frame's response (wrapped: a
+        // torso that turns all the way round crosses +-pi).
+        const float observed = std::fabs(WrapAngle(angle - axis.last_angle) /
+                                         static_cast<float>(dt) / axis.last_applied);
         if (observed > 0.1f && observed < 6.0f) {
             axis.rate += (observed - axis.rate) * 0.2f;
         }
@@ -221,13 +245,56 @@ float WrapAngle(float a) {
     return a;
 }
 
-float Limit(char* mech, size_t offset, float fallback) {
-    float v = fallback;
+struct Limits {
+    float twist;
+    float pitch;
+    bool full_turn;  // the torso turns all the way round
+    bool from_data;  // read from the torso data (else the fallback)
+};
+
+bool Sane(float v) { return v > 0.05f && v < 100.0f; }  // also false for NaN
+
+// The twist / pitch limits the game's torso update clamps with: the torso
+// data the update gets the same way (0x005F3C65: [torso+0x78] virtual [1],
+// no arguments). This runs in the game's own frame, on its thread.
+Limits TorsoLimits(char* torso, char* mech) {
+    Limits out{1.3963f, 0.5236f, false, false};
     __try {
-        v = At<float>(mech, offset);
+        char* sub = torso + kTorsoData;
+        void** vtable = *reinterpret_cast<void***>(sub);
+        using GetData = char*(__thiscall*)(void*);
+        char* data = vtable ? reinterpret_cast<GetData>(vtable[1])(sub) : nullptr;
+        if (data) {
+            const float twist = At<float>(data, kDataTwistLimit);
+            const float pitch = At<float>(data, kDataPitchLimit);
+            if (Sane(twist) && Sane(pitch)) {
+                out.twist = twist;
+                out.pitch = pitch;
+                out.from_data = true;
+            }
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
-    return (v > 0.05f && v < 3.15f) ? v : fallback;
+    if (!out.from_data) {
+        __try {
+            const float twist = At<float>(mech, kMechTwistLimit);
+            const float pitch = At<float>(mech, kMechPitchLimit);
+            if (Sane(twist)) {
+                out.twist = twist;
+            }
+            if (Sane(pitch)) {
+                out.pitch = pitch;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    // The update wraps the yaw to +-pi before it clamps, so a limit of pi or
+    // more never stops the torso.
+    out.full_turn = out.twist >= kPi;
+    if (out.pitch > 1.5f) {
+        out.pitch = 1.5f;
+    }
+    return out;
 }
 
 }  // namespace
@@ -321,10 +388,26 @@ void AimAfterDrive(char* self, double now) {
         return;
     }
 
+    // The game's own limits for this 'Mech (issue #37: the Vulture's torso
+    // turns all the way round and pitches 50 degrees; an 80 / 30 degree
+    // field read before stopped the aim point there).
+    const Limits limits = TorsoLimits(torso, mech);
+    const float twist_limit = limits.twist;
+    const float pitch_limit = limits.pitch;
+    // Moves the yaw aim point by `delta`. Within the twist limit, or for a
+    // torso that turns all the way round, at most kMaxLead from the torso
+    // angle `ref` either way (the angles wrap at +-pi there, as the game's).
+    auto move_yaw_target = [&](float delta, float ref) {
+        if (limits.full_turn) {
+            g.yaw.target =
+                ref + Clamp(WrapAngle(g.yaw.target - ref) + delta, -kMaxLead, kMaxLead);
+        } else {
+            g.yaw.target = Clamp(g.yaw.target + delta, -twist_limit, twist_limit);
+        }
+    };
+
     // Mouse right turns the torso right (yaw down); mouse up pitches up.
-    const float twist_limit = Limit(mech, kTwistLimit, 1.3963f);
-    const float pitch_limit = Limit(mech, kPitchLimit, 0.5236f);
-    g.yaw.target = Clamp(g.yaw.target - dx * sensitivity, -twist_limit, twist_limit);
+    move_yaw_target(-dx * sensitivity, yaw);
     if (pitch_by_mouse) {
         g.pitch.target = Clamp(g.pitch.target - dy * sensitivity, -pitch_limit, pitch_limit);
     }
@@ -362,13 +445,14 @@ void AimAfterDrive(char* self, double now) {
                 now, dt, legs_turn, legs_cmd, WrapAngle(heading + yaw), correction, predict,
                 g.legs_rate);
         }
-        g.yaw.target = Clamp(g.yaw.target - correction, -twist_limit, twist_limit);
         if (correction != 0.0f) {
-            steer_yaw = Clamp(yaw - correction, -twist_limit, twist_limit);
+            steer_yaw = limits.full_turn ? WrapAngle(yaw - correction)
+                                         : Clamp(yaw - correction, -twist_limit, twist_limit);
             At<float>(torso, kTorsoYaw) = steer_yaw;
             // Keep the twist-rate learning to the torso's own motion.
-            g.yaw.last_angle += steer_yaw - yaw;
+            g.yaw.last_angle += WrapAngle(steer_yaw - yaw);
         }
+        move_yaw_target(-correction, steer_yaw);
     } else {
         g.predicted = 0.0f;
         // Only with [aim] auto_center=1 (otherwise the drive step ran with
@@ -382,9 +466,7 @@ void AimAfterDrive(char* self, double now) {
         // that turns along with them.
         feed_forward = At<float>(self, kYawCmd);
         if (dt > 0.0 && feed_forward != 0.0f) {
-            g.yaw.target =
-                Clamp(g.yaw.target + feed_forward * g.yaw.rate * static_cast<float>(dt),
-                      -twist_limit, twist_limit);
+            move_yaw_target(feed_forward * g.yaw.rate * static_cast<float>(dt), yaw);
         }
     }
     const float yaw_cmd = Clamp(
@@ -395,7 +477,8 @@ void AimAfterDrive(char* self, double now) {
         pitch_cmd = Steer(g.pitch, pitch, At<float>(torso, kTorsoPitchRate), dt);
         At<float>(self, kPitchCmd) = pitch_cmd;
     }
-    g.marker_yaw = g.yaw.target - steer_yaw;
+    g.marker_yaw = limits.full_turn ? WrapAngle(g.yaw.target - steer_yaw)
+                                    : g.yaw.target - steer_yaw;
     g.marker_pitch = pitch_by_mouse ? g.pitch.target - pitch : 0.0f;
     g.marker_tick = GetTickCount();
 
@@ -404,10 +487,11 @@ void AimAfterDrive(char* self, double now) {
         if (dx != 0.0f || dy != 0.0f || now - logged >= 0.05) {
             logged = now;
             Log("aim: t=%.3f d=%+.0f,%+.0f target=%+.4f,%+.4f torso=%+.4f,%+.4f cmd=%+.3f,%+.3f "
-                "rate=%.2f,%.2f limit=%.4f,%.4f heading=%+.4f world=%+.4f gyro=%d\n",
+                "rate=%.2f,%.2f limit=%.4f,%.4f%s%s heading=%+.4f world=%+.4f gyro=%d\n",
                 now, dx, dy, g.yaw.target, g.pitch.target, yaw, pitch, yaw_cmd, pitch_cmd,
-                g.yaw.rate, g.pitch.rate, twist_limit, pitch_limit, g.heading,
-                WrapAngle(g.heading + yaw), gyro ? 1 : 0);
+                g.yaw.rate, g.pitch.rate, twist_limit, pitch_limit,
+                limits.full_turn ? " full_turn" : "", limits.from_data ? "" : " (fallback)",
+                g.heading, WrapAngle(g.heading + yaw), gyro ? 1 : 0);
         }
     }
 }
