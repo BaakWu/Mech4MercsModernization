@@ -107,12 +107,63 @@ bool PatchSlot(PatchedTable* tables, void** vtable, int slot, void* detour) {
 
 void** VtableOf(void* object) { return *reinterpret_cast<void***>(object); }
 
-void PatchDevice(void* device);
+// Gamepad devices (issue #42). DirectInput shares one device vtable across
+// all devices, so the gamepad flag has to be kept per device object.
+struct DeviceObject {
+    void* object;
+    bool gamepad;
+};
+DeviceObject g_objects[8] = {};
+
+void RememberDevice(void* object, bool gamepad) {
+    if (!object) {
+        return;
+    }
+    for (DeviceObject& entry : g_objects) {
+        if (entry.object == object) {
+            entry.gamepad = gamepad;
+            return;
+        }
+    }
+    for (DeviceObject& entry : g_objects) {
+        if (!entry.object) {
+            entry.object = object;
+            entry.gamepad = gamepad;
+            return;
+        }
+    }
+}
+
+bool IsGamepadObject(void* object) {
+    for (const DeviceObject& entry : g_objects) {
+        if (entry.object == object) {
+            return entry.gamepad;
+        }
+    }
+    return false;
+}
+
+volatile LONG g_gamepad_throttle = 0;
+
+void PatchDevice(void* device, bool gamepad);
 
 HRESULT WINAPI Hook_GetDeviceState(void* self, DWORD size, void* data) {
     auto original = reinterpret_cast<GetDeviceState_t>(
         FindOriginal(g_state_tables, VtableOf(self)));
     HRESULT result = original(self, size, data);
+    if (mw4hook::GetConfig().input_gamepad_layout && IsGamepadObject(self)) {
+        if (SUCCEEDED(result) && data && (size == 80 || size == 272)) {
+            // The game reads the torso from Y (pitch) and Z (torso twist).
+            // An Xbox-style pad's right stick is Rx/Ry; put it where the
+            // game expects it, and use the left stick Y for the throttle.
+            LONG* axes = static_cast<LONG*>(data);
+            mw4hook::SetGamepadThrottle(static_cast<int>(axes[1]));
+            axes[1] = axes[4];  // right stick Y -> pitch
+            axes[2] = axes[3];  // right stick X -> torso twist
+        } else if (FAILED(result)) {
+            mw4hook::SetGamepadThrottle(0);
+        }
+    }
     mw4hook::AutomationFilterDeviceState(size, data, &result);
     return result;
 }
@@ -122,14 +173,23 @@ HRESULT WINAPI Hook_DeviceQueryInterface(void* self, REFIID iid, void** out) {
         FindOriginal(g_qi_tables, VtableOf(self)));
     HRESULT result = original(self, iid, out);
     if (SUCCEEDED(result) && out && *out) {
-        PatchDevice(*out);
+        PatchDevice(*out, IsGamepadObject(self));
     }
     return result;
 }
 
-void PatchDevice(void* device) {
+void PatchDevice(void* device, bool gamepad) {
     if (!device) {
         return;
+    }
+    RememberDevice(device, gamepad);
+    if (gamepad) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            mw4hook::Log("dinput proxy: gamepad axis layout (left stick throttle/turn, right "
+                         "stick torso/pitch)\n");
+        }
     }
     void** vtable = VtableOf(device);
     if (PatchSlot(g_state_tables, vtable, kGetDeviceState,
@@ -196,6 +256,7 @@ bool IsWide(void** vtable) {
 struct KnownDevice {
     GUID instance;
     BYTE type;
+    BYTE subtype;  // DIDEVTYPEJOYSTICK_* (4 = gamepad, issue #42)
     char name[80];
 };
 KnownDevice g_devices[32] = {};
@@ -245,6 +306,7 @@ BOOL CALLBACK EnumFilter(const void* instance, void* ref) {
         KnownDevice& device = g_devices[g_device_count++];
         device.instance = guid;
         device.type = type;
+        device.subtype = static_cast<BYTE>((dev_type >> 8) & 0xFF);
         if (context->wide) {
             WideCharToMultiByte(CP_UTF8, 0, reinterpret_cast<const wchar_t*>(bytes + 0x28), -1,
                                 device.name, sizeof(device.name), nullptr, nullptr);
@@ -321,6 +383,14 @@ HRESULT WINAPI Hook_EnumDevices(void* self, DWORD type, EnumCallback_t callback,
 
 bool IsSystemDevice(REFGUID guid) {
     return IsEqualGUID(guid, kSysMouse) || IsEqualGUID(guid, kSysKeyboard);
+}
+
+// DIDEVTYPEJOYSTICK_GAMEPAD = 4. The Logitech Extreme 3D is subtype 1
+// (unknown) and keeps the traditional joystick layout; the Xbox 360 pad is
+// subtype 4. Issue #42.
+bool IsGamepadGuid(REFGUID guid) {
+    const KnownDevice* device = FindDevice(guid);
+    return device && device->type == kTypeJoystick && device->subtype == 4;
 }
 
 int CaptureFault(EXCEPTION_POINTERS* info, DWORD* code, void** where) {
@@ -412,8 +482,9 @@ HRESULT WINAPI Hook_CreateDevice(void* self, REFGUID guid, void** out, IUnknown*
             mw4hook::InputOpenEnd(guid);  // a fault leaves it in [opening]: skipped next time
         }
     }
-    if (SUCCEEDED(result) && out && mw4hook::GetConfig().debug_automation) {
-        PatchDevice(*out);
+    if (SUCCEEDED(result) && out &&
+        (mw4hook::GetConfig().debug_automation || mw4hook::GetConfig().input_gamepad_layout)) {
+        PatchDevice(*out, IsGamepadGuid(guid));
     }
     return result;
 }
@@ -440,8 +511,9 @@ HRESULT WINAPI Hook_CreateDeviceEx(void* self, REFGUID guid, REFIID iid, void** 
             mw4hook::InputOpenEnd(guid);  // a fault leaves it in [opening]: skipped next time
         }
     }
-    if (SUCCEEDED(result) && out && mw4hook::GetConfig().debug_automation) {
-        PatchDevice(*out);
+    if (SUCCEEDED(result) && out &&
+        (mw4hook::GetConfig().debug_automation || mw4hook::GetConfig().input_gamepad_layout)) {
+        PatchDevice(*out, IsGamepadGuid(guid));
     }
     return result;
 }
@@ -531,6 +603,14 @@ extern "C" HRESULT WINAPI Proxy_DirectInputCreateEx(HINSTANCE instance, DWORD ve
     g_pfn_##name = reinterpret_cast<void*>(Resolve(#name))
 
 namespace mw4hook {
+
+void SetGamepadThrottle(int value) {
+    InterlockedExchange(&g_gamepad_throttle, value);
+}
+
+int GamepadThrottle() {
+    return static_cast<int>(InterlockedCompareExchange(&g_gamepad_throttle, 0, 0));
+}
 
 void ResolveDinputExports() {
     MW4_RESOLVE(DirectInputCreateA);

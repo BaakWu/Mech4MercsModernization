@@ -85,6 +85,7 @@ struct Config {
     bool sound_background = true;  // [sound] background: keep playing when unfocused (#26)
     bool input_controllers = true;    // [input] controllers: open game controllers (#34)
     bool input_other_devices = false;  // [input] other_devices: also non-controller HID devices (#34)
+    bool input_gamepad_layout = true;  // [input] gamepad_layout: MW5-style gamepad axes (#42)
     // [mechlab] default_camo: a new pilot's default camouflage code (the first
     // character of MekTek's camouflage name; '_' = None; empty = template's).
     char default_camo = '_';
@@ -98,6 +99,12 @@ bool InputTypeSafe(BYTE type);  // listing this DIDEVTYPE on its own is safe (#4
 const char* InputDeviceBlocked(const GUID& instance);  // reason, or null
 void InputOpenBegin(const GUID& instance, const char* name);
 void InputOpenEnd(const GUID& instance);
+
+// Gamepad axis layout (dinput_proxy.cpp, issue #42): an Xbox-style pad gives
+// the game left stick X = turn, right stick Y = pitch, right stick X = torso,
+// and its left stick Y is the throttle (read by the drive hook).
+void SetGamepadThrottle(int value);  // -1000..1000
+int GamepadThrottle();
 
 // Refuse the game's own Assets\Binaries\imagehlp.dll (imagehlp.cpp, #35).
 void InstallImagehlpRedirect();

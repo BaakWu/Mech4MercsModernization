@@ -39,6 +39,7 @@ constexpr size_t kMinReverse = 0x650;      // float, smallest reverse throttle (
 constexpr float kRampFactor = 2.0f;        // W/S speed multiplier
 constexpr double kDecayTau = 0.35;         // reverse decay time constant, s
 constexpr float kSnap = 0.02f;             // below this the throttle is 0
+constexpr int kGamepadDeadzone = 250;      // left stick Y, -1000..1000 (#42)
 
 using Drive_t = void(__thiscall*)(void*, double);
 Drive_t g_drive = nullptr;
@@ -67,6 +68,23 @@ void __fastcall Hook_Drive(char* self, void*, double now) {
     const int auto_center_mode = auto_center ? *auto_center : 0;
     if (auto_center) {
         *auto_center = 0;
+    }
+    // Gamepad (issue #42): the left stick's Y is the throttle. It sets the
+    // game's own Accelerate/Decelerate held counters, so the throttle ramps
+    // and holds like W/S (and Throttle Decay applies); the right stick is
+    // remapped to pitch/torso in the dinput proxy. Centered leaves the
+    // keyboard counters alone.
+    if (GetConfig().input_gamepad_layout) {
+        const int stick = GamepadThrottle();
+        // DirectInput's Y axis is positive towards the player (the stock
+        // game's Invert Y Axis); pushing the stick forward is negative.
+        if (stick < -kGamepadDeadzone) {
+            *reinterpret_cast<int*>(self + kForwardHeld) = 1;
+            *reinterpret_cast<int*>(self + kBackwardHeld) = 0;
+        } else if (stick > kGamepadDeadzone) {
+            *reinterpret_cast<int*>(self + kBackwardHeld) = 1;
+            *reinterpret_cast<int*>(self + kForwardHeld) = 0;
+        }
     }
     g_drive(self, now);
     if (auto_center) {

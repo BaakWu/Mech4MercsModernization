@@ -424,6 +424,23 @@ the joystick in Options > Controls. The filter is by DirectInput device type,
 not by vendor or model, so any joystick, gamepad or wheel is offered; the
 headset/microphone collections stay in `DIDEVTYPE_DEVICE` and are not.
 
+**Gamepad axes (`[input] gamepad_layout=1`; issue #42).** A gamepad reports
+its right stick as `Rx`/`Ry` and its triggers as `Z`/`Rz`, not where MW4
+expects a joystick. The `GetDeviceState` hook rebuilds the buffer for a
+`DIDEVTYPEJOYSTICK_GAMEPAD` device (the Xbox 360 pad is subtype 4):
+
+- left stick X stays X: Turn Left/Right, as in MW5;
+- right stick Y goes to the game's Y (pitch), right stick X to its Z (torso
+  twist), so the right stick aims the torso;
+- the left stick's Y is not given to the game as an axis. The drive hook reads
+  it and sets the game's Accelerate/Decelerate held counters, so the throttle
+  ramps and holds like W/S, and Throttle Decay works. Centered leaves the
+  keyboard counters alone.
+
+The Logitech Extreme 3D is subtype 1 (traditional/unknown), so it keeps the
+stock axes. The gamepad's face buttons still use the game's joystick bindings;
+the full MW5 button layout is issue #42's follow-up.
+
 ### Direct3D: per-frame display rebuild, depth buffer
 
 Found 2026-11-16 by A/B with all display features disabled (the stock game
