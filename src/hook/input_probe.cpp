@@ -121,6 +121,19 @@ BOOL CALLBACK ProbeCollect(const DIDEVICEINSTANCEA* instance, void* ref) {
     return DIENUM_CONTINUE;
 }
 
+// Axis names and their offsets in the probe's DIJOYSTATE, for the log. The
+// Xbox pad's right stick is Rx/Ry on paper, but the driver's object order is
+// what the game sees, so record it (issue #42).
+BOOL CALLBACK ProbeAxis(const DIDEVICEOBJECTINSTANCEA* object, void*) {
+    if ((object->dwType & DIDFT_AXIS) == 0) {
+        return DIENUM_CONTINUE;
+    }
+    char line[160];
+    sprintf_s(line, "axis %lu %s\r\n", object->dwOfs, object->tszName);
+    ProbeWrite(line);
+    return DIENUM_CONTINUE;
+}
+
 // The standard joystick format (DIJOYSTATE), as c_dfDIJoystick.
 void JoystickFormat(DIDATAFORMAT& format, DIOBJECTDATAFORMAT (&objects)[44]) {
     const DWORD axis = DIDFT_AXIS | DIDFT_ANYINSTANCE | kDidftOptional;
@@ -231,6 +244,7 @@ void RunProbe(const char* mode_name, const char* skip, const char* out_path) {
                                                       reinterpret_cast<void**>(&dev), nullptr);
         if (SUCCEEDED(opened) && dev) {
             dev->SetDataFormat(&format);
+            dev->EnumObjects(&ProbeAxis, nullptr, DIDFT_AXIS);
             if (window) {
                 dev->SetCooperativeLevel(window, DISCL_NONEXCLUSIVE | DISCL_BACKGROUND);
             }
@@ -436,6 +450,8 @@ ProbeOutcome RunProbeRound(int round, const char* mode) {
             ++outcome.checked;
         } else if (strncmp(line, "crash ", 6) == 0) {
             strncpy_s(crash, line + 6, _TRUNCATE);
+        } else if (strncmp(line, "axis ", 5) == 0) {
+            Log("input: probe %s\n", line);
         }
     }
     const char* how = crash[0] ? crash : (waited != WAIT_OBJECT_0 ? "no response" : "exited");

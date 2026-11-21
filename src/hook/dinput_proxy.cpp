@@ -153,13 +153,13 @@ HRESULT WINAPI Hook_GetDeviceState(void* self, DWORD size, void* data) {
     HRESULT result = original(self, size, data);
     if (mw4hook::GetConfig().input_gamepad_layout && IsGamepadObject(self)) {
         if (SUCCEEDED(result) && data && (size == 80 || size == 272)) {
-            // The game reads the torso from Y (pitch) and Z (torso twist).
-            // An Xbox-style pad's right stick is Rx/Ry; put it where the
-            // game expects it, and use the left stick Y for the throttle.
+            // The game's pitch is Y; an Xbox-style pad's right stick Y is Ry.
+            // Its right stick X is already Rx, which is the axis the game's
+            // torso function uses; do not copy it into Z (the left trigger),
+            // which also drives the stock throttle (issue #42 follow-up).
             LONG* axes = static_cast<LONG*>(data);
             mw4hook::SetGamepadThrottle(static_cast<int>(axes[1]));
             axes[1] = axes[4];  // right stick Y -> pitch
-            axes[2] = axes[3];  // right stick X -> torso twist
         } else if (FAILED(result)) {
             mw4hook::SetGamepadThrottle(0);
         }
