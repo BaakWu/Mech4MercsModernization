@@ -44,6 +44,9 @@ hardware incompatibility but are often configuration or compatibility bugs.
 - the **in-game Options > Resolution controls** keep working
 - always **32-bit color**, never a 16-bit fallback
 - correct mouse and display behavior with Windows display scaling above 100%
+- **joysticks, gamepads and wheels keep working**: controllers are listed on
+  their own, so a headset or receiver that crashes Windows' DirectInput while
+  it walks every HID device can no longer hide the joystick (issues #34, #40)
 - **sharper menus**: the 800x600 menus, MechLab and text are scaled up with a
   Lanczos filter, readable on 1080p and larger screens (issue #20)
 - a **weight-class filter in the MechLab**: a Class droplist (All / Light /

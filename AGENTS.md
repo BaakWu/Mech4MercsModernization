@@ -509,6 +509,13 @@ High-value files:
   capture from the ddraw proxy. It never touches the real cursor, focus or
   desktop. AntiHack denies external memory reads, so `[debug] dump_image=1`
   writes the unpacked image for static analysis.
+- Joystick option no longer greyed out by an unrelated HID device (issue
+  #40): the game lists the keyboard, mouse and controllers one type at a
+  time instead of walking every HID device, and the startup probe does the
+  same (falling back to per-type listings with `[input] other_devices=1`).
+  Verified with a Logitech Extreme 3D: the probe opens it, the game offers
+  it, and Options > Controls shows it with the joystick column enabled.
+  docs/HOOK.md ("Input devices at startup", issues #34/#40).
 - The process window/display path is documented in `docs/HOOK.md`.
 - A single-executable development patcher (`mw4patch.exe`) now:
   - verifies `MW4Mercs.exe` and the 32-file core manifest,

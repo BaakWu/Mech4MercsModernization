@@ -332,7 +332,7 @@ and the ddraw log lists every Direct3D device Windows offers (`d3d device
 "Direct3D HAL" (...): devcaps ... hardware rasterization`) and any failed
 `CreateDevice` with its HRESULT. A player's log then shows which input sent
 the game to the software renderer.
-### Input devices at startup (`[input]`; issue #34)
+### Input devices at startup (`[input]`; issues #34, #40)
 
 At startup the game enumerates every attached DirectInput device
 (`EnumDevices`, all types, attached only; 3.1c `0x00720F60`) and opens each
@@ -371,21 +371,21 @@ for a value cap), so the patch no longer depends on knowing which devices
 are bad. `input_probe.cpp`:
 
 1. **Probe.** Before the game's first enumeration, the hook runs
-   `rundll32.exe "<game>\dinput.dll",ProbeInputDevices <J|A><skip list>|<file>`
+   `rundll32.exe "<game>\dinput.dll",ProbeInputDevices <mode>|<skip list>|<file>`
    (32-bit rundll32, `CREATE_NO_WINDOW`; DllMain does nothing but resolve the
-   real DirectInput when the host is rundll32). The probe enumerates every
-   attached device, then for each device the game would be given (controllers;
-   all non-system devices with `other_devices=1`) creates it, sets the joystick
-   data format, the cooperative level (hidden window), acquires, polls and
-   reads it. It writes each step to the file before taking it; a crash is
-   recorded by its own unhandled-exception filter (`crash C0000005
-   dinput.dll+0x...`) and ends the process without Windows Error Reporting.
-   The hook keeps the device the probe stopped on from the game and runs
-   another round without it (up to 4 rounds, 6 s each), so the devices after
-   it are checked too. If the probe fails while listing the devices, the game
-   is given the keyboard and mouse only (listed by type, which does not walk
-   the HID devices). Measured: about 0.8-1 s per round (process start,
-   DirectInput, enumeration); 27 devices opened and read in 1.25 s.
+   real DirectInput when the host is rundll32). The mode is `S` (list the
+   controllers and open them: the default), `A` (`other_devices=1`: list
+   every device and open controllers and other devices), or `T<n>` (list one
+   `DIDEVTYPE`; used for the fallback below). The probe creates each device
+   it opens, sets the joystick data format, the cooperative level (hidden
+   window), acquires, polls and reads it. It writes each step to the file
+   before taking it; a crash is recorded by its own unhandled-exception
+   filter (`crash C0000005 dinput.dll+0x...`) and ends the process without
+   Windows Error Reporting. The hook keeps the device the probe stopped on
+   from the game and runs another round without it (up to 4 rounds, 6 s
+   each), so the devices after it are checked too. Measured: the `S` round
+   opens and reads the Logitech Extreme 3D in about 0.7 s (process start,
+   DirectInput, enumeration); an `A` round opened 28 devices in 0.3 s.
 2. **Crash memory** (`mw4hook-input.ini` next to the game). Before the game
    opens a controller it is written to `[opening]` and removed when the open
    returns. An entry left there means the game closed during that open: at
@@ -399,6 +399,24 @@ are bad. `input_probe.cpp`:
 Every decision is logged: `dinput: device "..." (controller, ...) not offered
 to the game: DirectInput failed opening it in the probe (C0000005
 dinput.dll+0x123F9)`.
+
+**The full listing no longer costs the joystick (issue #40).** A player's
+Logitech headset and receiver made DirectInput crash while listing the
+devices. The probe then reported the listing as unsafe and the game was given
+the keyboard and mouse only, so Options > Controls greyed the joystick out.
+The game now asks DirectInput for one type at a time:
+
+- keyboard and mouse (the system devices), then
+- controllers (`DIDEVTYPE_JOYSTICK`) when `[input] controllers=1`.
+
+`EnumDevices(0)` (the stock walk of every HID device) is used only with
+`[input] other_devices=1`, which is opt-in. The default path never touches
+the other HID devices, so a headset or receiver cannot cost the player the
+joystick. With `other_devices=1`, an `A` listing that fails falls back to
+`S` and `T1`, so a broken other device still cannot cost the controllers.
+The probe measures the same thing before the game sees it; if the controllers
+cannot even be listed on their own, the game gets the keyboard and mouse only
+and the log says why (`input: the controllers cannot be listed safely ...`).
 
 ### Direct3D: per-frame display rebuild, depth buffer
 
@@ -1068,8 +1086,10 @@ names=1       ; roster 'Mech names redrawn from the MicroStyle font
 [sound]
 background=1  ; keep the audio playing when the window is not focused
 [input]
-controllers=1   ; (default, not in the shipped ini) open joysticks, gamepads, wheels
-other_devices=0 ; (default, not in the shipped ini) also offer other HID devices (stock)
+controllers=1   ; (default, not in the shipped ini) open joysticks, gamepads, wheels;
+                ; they are listed on their own, so other HID devices cannot hide them
+other_devices=0 ; (default, not in the shipped ini) also offer other HID devices (stock);
+                ; the game then walks every HID device, as the stock game did
 [frontend]
 stretch=1     ; scale the picture into the window
 badge=1       ; Main Menu "MODERNIZED / PATCH vX.Y.Z" badge (bottom left)

@@ -157,6 +157,14 @@ void PatchDevice(void* device) {
 // logged with its type. Opening a controller is guarded: if DirectInput
 // faults inside it, the device is logged and skipped (the open fails, as
 // for an unplugged device) instead of the game closing.
+//
+// The devices are listed one type at a time (keyboard, mouse, controllers)
+// rather than in one EnumDevices(0) pass (#40): a headset or receiver whose
+// HID objects Windows' DirectInput mishandles can crash that pass, which
+// used to leave the player with the keyboard and mouse only. If the probe
+// cannot list a type safely, that type is left out (input_probe.cpp).
+// Enumeration is still filtered, so the game never sees the other HID
+// devices unless [input] other_devices=1.
 constexpr int kEnumDevices = 4;  // IDirectInput*
 constexpr BYTE kTypeDevice = 1;    // DIDEVTYPE_DEVICE
 constexpr BYTE kTypeMouse = 2;     // DIDEVTYPE_MOUSE
@@ -263,18 +271,52 @@ HRESULT WINAPI Hook_EnumDevices(void* self, DWORD type, EnumCallback_t callback,
     }
     mw4hook::InputSafetyInit();  // probe and crash memory, once, before the first listing
     EnumContext context = {callback, ref, IsWide(VtableOf(self))};
-    if (mw4hook::InputEnumerationUnsafe() && type != kTypeMouse && type != kTypeKeyboard) {
-        // DirectInput failed listing the devices in the probe: list only the
-        // keyboard and the mouse (by type, which does not walk the HID
-        // devices).
-        if (type != 0) {
+    const mw4hook::Config& config = mw4hook::GetConfig();
+    if (type != 0) {
+        if (!mw4hook::InputTypeSafe(static_cast<BYTE>(type))) {
+            mw4hook::Log("dinput: not listing device type %lu: DirectInput cannot list it "
+                         "safely\n",
+                         static_cast<unsigned long>(type));
             return 0;  // DI_OK, nothing listed
         }
-        const HRESULT mouse = original(self, kTypeMouse, &EnumFilter, &context, flags);
-        const HRESULT keyboard = original(self, kTypeKeyboard, &EnumFilter, &context, flags);
-        return FAILED(mouse) ? mouse : keyboard;
+        return original(self, type, &EnumFilter, &context, flags);
     }
-    return original(self, type, &EnumFilter, &context, flags);
+    // [input] other_devices=1 keeps the stock listing of every device when
+    // the probe could list them. Otherwise list one device type at a time:
+    // Windows' DirectInput can crash while walking the HID devices for a
+    // headset or receiver, and a full listing would then cost the player the
+    // joystick too (#40). Listing DIDEVTYPE_JOYSTICK does not offer the game
+    // the other HID devices, which it never used.
+    if (config.input_controllers && config.input_other_devices &&
+        !mw4hook::InputEnumerationUnsafe()) {
+        return original(self, 0, &EnumFilter, &context, flags);
+    }
+    BYTE types[4] = {kTypeMouse, kTypeKeyboard, 0, 0};
+    int count = 2;
+    bool controllers = false;
+    bool others = false;
+    if (config.input_controllers && mw4hook::InputTypeSafe(kTypeJoystick)) {
+        types[count++] = kTypeJoystick;
+        controllers = true;
+    }
+    if (config.input_other_devices && mw4hook::InputTypeSafe(kTypeDevice)) {
+        types[count++] = kTypeDevice;
+        others = true;
+    }
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        mw4hook::Log("dinput: listing the devices one type at a time (keyboard, mouse%s%s)\n",
+                     controllers ? ", controllers" : "", others ? ", other devices" : "");
+    }
+    HRESULT result = 0;
+    for (int i = 0; i < count; ++i) {
+        const HRESULT listed = original(self, types[i], &EnumFilter, &context, flags);
+        if (FAILED(listed)) {
+            result = listed;
+        }
+    }
+    return result;
 }
 
 bool IsSystemDevice(REFGUID guid) {

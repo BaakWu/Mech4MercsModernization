@@ -8,11 +8,19 @@
 //
 // 1. Probe. Before the game's first enumeration, a throwaway process
 //    (rundll32 running ProbeInputDevices from this DLL) enumerates the
-//    devices and opens, configures and reads each controller the way a game
+//    controllers and opens, configures and reads each one the way a game
 //    does. It writes each step to a file before taking it. If DirectInput
 //    crashes or hangs on a device, only that process ends; the device it
-//    was on is not offered to the game. If enumeration itself fails, the
-//    game is given the keyboard and mouse only.
+//    was on is not offered to the game.
+//
+//    The probe lists the controllers on their own (DIDEVTYPE_JOYSTICK), not
+//    all devices at once (#40): a headset or receiver that Windows'
+//    DirectInput handles badly while walking the HID devices then cannot
+//    cost the player the joystick. The game lists the same way
+//    (dinput_proxy.cpp). With [input] other_devices=1 the probe lists every
+//    device instead, and if that crashes it falls back to listing the
+//    controllers and the other devices separately so the controllers are
+//    still found.
 // 2. Crash memory. Before the game opens a controller, the device is written
 //    to mw4hook-input.ini [opening] and removed when the open returns. An
 //    entry left there means the game closed during that open: from the next
@@ -134,10 +142,37 @@ void JoystickFormat(DIDATAFORMAT& format, DIOBJECTDATAFORMAT (&objects)[44]) {
               sizeof(DIJOYSTATE), static_cast<DWORD>(n), objects};
 }
 
-// skip: "J" (controllers only) or "A" (every device the game may be given,
-// [input] other_devices=1), then the instance GUIDs to leave out.
-void RunProbe(const char* skip, const char* out_path) {
-    const bool all_types = skip[0] == 'A';
+struct ProbeMode {
+    DWORD list_type;       // DIDEVTYPE to list: 0 = every device
+    bool open_controllers; // open the controllers the listing returns
+    bool open_other;       // open the non-controller devices too
+};
+
+// "S" lists the controllers only and opens them; "A" lists every device and
+// opens every device the game may be given ([input] other_devices=1); "T<n>"
+// lists one DIDEVTYPE and opens its devices (T4 controllers, T1 the others).
+bool ParseProbeMode(const char* mode, ProbeMode* out) {
+    if (mode[0] == 'S' && mode[1] == '\0') {
+        *out = {kTypeJoystick, true, false};
+        return true;
+    }
+    if (mode[0] == 'A' && mode[1] == '\0') {
+        *out = {0, true, true};
+        return true;
+    }
+    if (mode[0] == 'T' && mode[1] >= '1' && mode[1] <= '4' && mode[2] == '\0') {
+        const DWORD type = static_cast<DWORD>(mode[1] - '0');
+        *out = {type, type == kTypeJoystick, type != kTypeJoystick};
+        return true;
+    }
+    return false;
+}
+
+// mode: how to list and what to open (see ParseProbeMode); skip: the instance
+// GUIDs that failed in earlier rounds.
+void RunProbe(const char* mode_name, const char* skip, const char* out_path) {
+    ProbeMode mode = {};
+    const bool valid_mode = ParseProbeMode(mode_name, &mode);
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     SetUnhandledExceptionFilter(&ProbeCrashFilter);
     g_probe_out = CreateFileA(out_path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
@@ -146,6 +181,12 @@ void RunProbe(const char* skip, const char* out_path) {
         return;
     }
     ProbeWrite("start\r\n");
+    if (!valid_mode) {
+        ProbeWrite("badmode\r\n");
+        CloseHandle(g_probe_out);
+        g_probe_out = INVALID_HANDLE_VALUE;
+        return;
+    }
     using Create_t = HRESULT(WINAPI*)(HINSTANCE, DWORD, REFIID, void**, IUnknown*);
     auto create = reinterpret_cast<Create_t>(g_pfn_DirectInputCreateEx);
     IDirectInput7A* dinput = nullptr;
@@ -157,9 +198,10 @@ void RunProbe(const char* skip, const char* out_path) {
     }
     static ProbeList list = {};
     const HRESULT enumerated =
-        dinput->EnumDevices(0, &ProbeCollect, &list, DIEDFL_ATTACHEDONLY);
+        dinput->EnumDevices(mode.list_type, &ProbeCollect, &list, DIEDFL_ATTACHEDONLY);
     char line[200];
-    sprintf_s(line, "enum %08lX %d\r\n", static_cast<unsigned long>(enumerated), list.count);
+    sprintf_s(line, "enum %lu %08lX %d\r\n", static_cast<unsigned long>(mode.list_type),
+              static_cast<unsigned long>(enumerated), list.count);
     ProbeWrite(line);
     HWND window = CreateWindowExA(0, "STATIC", "", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
                                   nullptr, nullptr);
@@ -169,9 +211,13 @@ void RunProbe(const char* skip, const char* out_path) {
     for (int i = 0; i < list.count; ++i) {
         const DIDEVICEINSTANCEA& device = list.devices[i];
         const BYTE type = static_cast<BYTE>(device.dwDevType & 0xFF);
-        if (type == kTypeMouse || type == kTypeKeyboard ||
-            (!all_types && type != kTypeJoystick)) {
+        if (type == kTypeMouse || type == kTypeKeyboard) {
             continue;  // the game is not given it
+        }
+        const bool open = (type == kTypeJoystick && mode.open_controllers) ||
+                          (type != kTypeJoystick && mode.open_other);
+        if (!open) {
+            continue;
         }
         char guid[40];
         FormatGuid(device.guidInstance, guid);
@@ -218,7 +264,9 @@ struct Blocked {
 };
 Blocked g_blocked[32] = {};
 int g_blocked_count = 0;
-bool g_enumeration_unsafe = false;
+bool g_enumeration_unsafe = false;  // listing every device at once failed (#40)
+bool g_joystick_safe = false;       // controllers can be listed on their own
+bool g_other_safe = false;          // DIDEVTYPE_DEVICE can be listed on its own
 bool g_initialized = false;
 wchar_t g_memory_path[MAX_PATH] = {};  // mw4hook-input.ini next to the game
 
@@ -275,17 +323,33 @@ void LoadCrashMemory() {
     }
 }
 
-// One probe round; true when it stopped on a device (then another round
-// runs without it, so the devices after it are checked too).
-bool RunProbeRound(int round) {
+struct ProbeOutcome {
+    bool started = false;
+    bool enumerated = false;
+    int checked = 0;
+    bool stopped = false;  // an open did not return: another round may get further
+};
+
+const char* ProbeLabel(const char* mode) {
+    if (strcmp(mode, "S") == 0) return "controllers";
+    if (strcmp(mode, "A") == 0) return "all devices";
+    if (strcmp(mode, "T1") == 0) return "other devices";
+    return mode;
+}
+
+// One probe round. stopped is set when it did not return from a device; the
+// caller then runs another round without it (in g_blocked) so the devices
+// after it are checked too.
+ProbeOutcome RunProbeRound(int round, const char* mode) {
+    ProbeOutcome outcome;
     wchar_t dll[MAX_PATH];
     HMODULE self = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                        reinterpret_cast<LPCWSTR>(&RunProbeRound), &self);
     if (!self || !GetModuleFileNameW(self, dll, MAX_PATH)) {
-        Log("input: probe not run (module path)\n");
-        return false;
+        Log("input: probe (%s) not run (module path)\n", ProbeLabel(mode));
+        return outcome;
     }
     wchar_t system[MAX_PATH];
     UINT n = GetSystemWow64DirectoryW(system, MAX_PATH);  // 32-bit rundll32 on 64-bit Windows
@@ -294,24 +358,26 @@ bool RunProbeRound(int round) {
     }
     wchar_t temp[MAX_PATH];
     if (n == 0 || n >= MAX_PATH || !GetTempPathW(MAX_PATH, temp)) {
-        Log("input: probe not run (paths)\n");
-        return false;
+        Log("input: probe (%s) not run (paths)\n", ProbeLabel(mode));
+        return outcome;
     }
     wchar_t out[MAX_PATH];
     swprintf_s(out, L"%smw4hook-input-%lu.txt", temp, GetCurrentProcessId());
     DeleteFileW(out);
-    // Arguments: the devices that failed in earlier rounds, '|', the output.
+    // Arguments: mode, '|', the devices that failed in earlier rounds, '|',
+    // the output.
     wchar_t skip[32 * 40 + 2] = {};
-    wcscpy_s(skip, GetConfig().input_other_devices ? L"A" : L"J");
     for (int i = 0; i < g_blocked_count; ++i) {
         wchar_t guid[40];
         MultiByteToWideChar(CP_UTF8, 0, g_blocked[i].guid, -1, guid, 40);
         wcscat_s(skip, guid);
         wcscat_s(skip, L",");
     }
+    wchar_t wide_mode[8] = {};
+    MultiByteToWideChar(CP_UTF8, 0, mode, -1, wide_mode, 8);
     wchar_t command[4 * MAX_PATH + 32 * 40];
-    swprintf_s(command, L"\"%s\\rundll32.exe\" \"%s\",ProbeInputDevices %s|%s", system, dll,
-               skip, out);
+    swprintf_s(command, L"\"%s\\rundll32.exe\" \"%s\",ProbeInputDevices %s|%s|%s", system, dll,
+               wide_mode, skip, out);
     wchar_t exe[MAX_PATH];
     swprintf_s(exe, L"%s\\rundll32.exe", system);
     STARTUPINFOW si = {sizeof(si)};
@@ -319,9 +385,9 @@ bool RunProbeRound(int round) {
     const DWORD start = GetTickCount();
     if (!CreateProcessW(exe, command, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
                         nullptr, &si, &pi)) {
-        Log("input: probe not run (CreateProcess %lu); relying on the crash memory\n",
-            GetLastError());
-        return false;
+        Log("input: probe (%s) not run (CreateProcess %lu); relying on the crash memory\n",
+            ProbeLabel(mode), GetLastError());
+        return outcome;
     }
     const DWORD waited = WaitForSingleObject(pi.hProcess, kProbeTimeoutMs);
     if (waited != WAIT_OBJECT_0) {
@@ -345,48 +411,65 @@ bool RunProbeRound(int round) {
     data[got] = '\0';
     const DWORD elapsed = GetTickCount() - start;
     if (!strstr(data, "start\r\n")) {
-        Log("input: probe did not start (exit %lu); relying on the crash memory\n", code);
-        return false;
+        Log("input: probe (%s) did not start (exit %lu); relying on the crash memory\n",
+            ProbeLabel(mode), code);
+        return outcome;
     }
     if (strstr(data, "nodinput\r\n")) {
-        Log("input: probe could not create DirectInput\n");
-        return false;
+        Log("input: probe (%s) could not create DirectInput; relying on the crash memory\n",
+            ProbeLabel(mode));
+        return outcome;
     }
+    outcome.started = true;  // DirectInput was created; an unlisted type means it failed
     // The last "open" without its "ok" is the device it stopped on.
     char pending[40] = {};
-    int checked = 0;
-    bool enumerated = false;
     char crash[200] = {};
     char* next = nullptr;
     for (char* line = strtok_s(data, "\r\n", &next); line;
          line = strtok_s(nullptr, "\r\n", &next)) {
         if (strncmp(line, "enum ", 5) == 0) {
-            enumerated = true;
+            outcome.enumerated = true;
         } else if (strncmp(line, "open ", 5) == 0) {
             strncpy_s(pending, line + 5, _TRUNCATE);
         } else if (strncmp(line, "ok ", 3) == 0) {
             pending[0] = '\0';
-            ++checked;
+            ++outcome.checked;
         } else if (strncmp(line, "crash ", 6) == 0) {
             strncpy_s(crash, line + 6, _TRUNCATE);
         }
     }
     const char* how = crash[0] ? crash : (waited != WAIT_OBJECT_0 ? "no response" : "exited");
-    if (!enumerated) {
-        g_enumeration_unsafe = true;
-        Log("input: probe: DirectInput failed while listing the devices (%s); the game gets "
-            "the keyboard and mouse only\n",
-            how);
-        return false;
+    if (!outcome.enumerated) {
+        Log("input: probe (%s): DirectInput failed while listing (%s)\n", ProbeLabel(mode), how);
+        return outcome;
     }
     if (pending[0]) {
         char reason[200];
         sprintf_s(reason, "DirectInput failed opening it in the probe (%s)", how);
         Block(pending, reason);
     }
-    Log("input: probe round %d: %d controller(s) opened and read in %lu ms%s%s\n", round,
-        checked, elapsed, pending[0] ? "; stopped on one: " : "", pending[0] ? how : "");
-    return pending[0] != '\0';
+    Log("input: probe (%s) round %d: %d device(s) opened and read in %lu ms%s%s\n",
+        ProbeLabel(mode), round, outcome.checked, elapsed,
+        pending[0] ? "; stopped on one: " : "", pending[0] ? how : "");
+    outcome.stopped = pending[0] != '\0';
+    return outcome;
+}
+
+// Probe rounds until no open is left unfinished; an opened device that
+// crashed or hung the probe is in g_blocked and skipped by the next round.
+ProbeOutcome RunProbeRounds(const char* mode) {
+    ProbeOutcome total;
+    for (int round = 1; round <= 4; ++round) {
+        const ProbeOutcome outcome = RunProbeRound(round, mode);
+        total.started = total.started || outcome.started;
+        total.enumerated = total.enumerated || outcome.enumerated;
+        total.checked += outcome.checked;
+        total.stopped = outcome.stopped;
+        if (!outcome.stopped) {
+            break;
+        }
+    }
+    return total;
 }
 
 }  // namespace
@@ -398,13 +481,67 @@ void InputSafetyInit() {
     g_initialized = true;
     MemoryPath();
     LoadCrashMemory();
-    if (GetConfig().input_controllers) {
-        for (int round = 1; round <= 4 && RunProbeRound(round); ++round) {
+    const Config& config = GetConfig();
+    if (!config.input_controllers) {
+        Log("input: controllers are off ([input] controllers=0): the game gets the keyboard and "
+            "mouse only\n");
+        return;
+    }
+    if (config.input_other_devices) {
+        // The stock-like listing of every device is opt-in ([input]
+        // other_devices=1). If it crashes, the controllers are still found by
+        // listing them on their own (#40).
+        const ProbeOutcome all = RunProbeRounds("A");
+        if (all.enumerated || !all.started) {
+            // Listed, or the probe could not run at all: keep the stock
+            // listing (the crash memory and the open guard still apply).
+            g_joystick_safe = true;
+            g_other_safe = true;
+            return;
         }
+        g_enumeration_unsafe = true;
+        Log("input: listing every device failed; listing the controllers and the other devices "
+            "separately instead\n");
+        const ProbeOutcome controllers = RunProbeRounds("S");
+        g_joystick_safe = controllers.enumerated || !controllers.started;
+        const ProbeOutcome others = RunProbeRounds("T1");
+        g_other_safe = others.enumerated || !others.started;
+        if (!g_joystick_safe) {
+            Log("input: the controllers cannot be listed safely: the game gets the keyboard and "
+                "mouse only; unplug the device that crashes DirectInput and start again\n");
+        }
+        if (!g_other_safe) {
+            Log("input: the other devices cannot be listed safely: they are left out\n");
+        }
+        return;
+    }
+    // The game is only given the keyboard, the mouse and the controllers, so
+    // list the controllers on their own. A headset or receiver that Windows'
+    // DirectInput handles badly while walking every HID device then no longer
+    // costs the player the joystick (#40).
+    const ProbeOutcome controllers = RunProbeRounds("S");
+    // If the probe could not run at all there is no evidence of a bad device:
+    // rely on the crash memory and the guarded open, as before.
+    g_joystick_safe = controllers.enumerated || !controllers.started;
+    if (!controllers.enumerated && controllers.started) {
+        Log("input: the controllers cannot be listed safely: the game gets the keyboard and mouse "
+            "only; unplug the device that crashes DirectInput and start again\n");
     }
 }
 
 bool InputEnumerationUnsafe() { return g_enumeration_unsafe; }
+
+bool InputTypeSafe(BYTE type) {
+    switch (type) {
+        case kTypeMouse:
+        case kTypeKeyboard:
+            return true;  // listed by DirectInput itself, no HID walk
+        case kTypeJoystick:
+            return g_joystick_safe;
+        default:
+            return g_other_safe;
+    }
+}
 
 const char* InputDeviceBlocked(const GUID& instance) {
     char guid[40];
@@ -452,11 +589,18 @@ void InputOpenEnd(const GUID& instance) {
 
 }  // namespace mw4hook
 
-// rundll32 "<this dll>",ProbeInputDevices <output file>
+// rundll32 "<this dll>",ProbeInputDevices <mode>|<skip>|<output file>
 extern "C" void CALLBACK ProbeInputDevices(HWND, HINSTANCE, LPSTR command, int) {
-    char* bar = command ? strchr(command, '|') : nullptr;
-    if (bar && bar[1]) {
-        *bar = '\0';
-        mw4hook::RunProbe(command, bar + 1);
+    char* mode_end = command ? strchr(command, '|') : nullptr;
+    if (!mode_end) {
+        return;
     }
+    *mode_end = '\0';
+    char* skip = mode_end + 1;
+    char* skip_end = strchr(skip, '|');
+    if (!skip_end || !skip_end[1]) {
+        return;
+    }
+    *skip_end = '\0';
+    mw4hook::RunProbe(command, skip, skip_end + 1);
 }
