@@ -399,6 +399,10 @@ High-value files:
 11. **Treat `MekTek.rar` as immutable.** The only allowed operation is
     extraction to create a fresh test install. Never modify, repack, rename,
     delete, or commit it.
+12. **Releases require the owner's explicit approval.** Build, install and
+    test the installer, but do not create a tag, publish a GitHub release, or
+    upload/replace release assets until the owner says so. Report the
+    version, artifact path and test results, then wait.
 
 ## 8. Agent workflow
 
@@ -432,8 +436,11 @@ High-value files:
    - AntiHack still loads
    - no new crash in the menu or in a mission
 8. Update docs and commit only source, docs, manifests, and small patch data.
-9. Never leave the game or a test process running.
-10. Before handing off, record whether the test started from a fresh
+9. Build and verify the release installer, then **stop and ask the owner**
+   before tagging or publishing. Do not create the tag or GitHub release
+   without an explicit go-ahead (rule 12).
+10. Never leave the game or a test process running.
+11. Before handing off, record whether the test started from a fresh
     `MekTek.rar` extraction or from an already-patched install.
 
 ## 9. Current status and open questions
