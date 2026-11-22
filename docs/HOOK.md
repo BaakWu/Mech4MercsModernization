@@ -613,8 +613,12 @@ preset holds, and a W tap from it decays again.
 
 ### Mouse aim point (`[aim] track_pointer=1`, part of the MW5 controls; issue #15)
 
-It is installed together with the MW5-style controls: the installer sets
-`track_pointer` to the same choice as `mw5`. There is no in-game switch.
+It is installed together with the MW5-style controls: a first install sets
+`track_pointer` to the same choice as `mw5`, and changing the MW5 checkbox
+in the installer aligns it again. An update keeps the installed
+`track_pointer` value, so it cannot turn the aim point (and with it the
+Gyro Aim switch) off on its own. There is no in-game switch for the aim
+point itself.
 
 **Stock behavior.** The mouse sets a torso turn *speed*. The per-frame mouse
 step (`0x0054EDA0`) adds each frame's motion × sensitivity (`+0x17C`) to an

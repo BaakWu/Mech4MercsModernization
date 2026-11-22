@@ -20,10 +20,11 @@ One window:
   - *Throttle Decay setting* (always included; it is an Options > Game
     switch, off until the player turns it on)
   - *MechWarrior 5-style controls* (optional checkbox; writes
-    `[controls] mw5=1` and `[aim] track_pointer=1`): the MW5 key layout
-    (new pilots get it automatically; existing pilots via DEFAULT in
-    Options > Controls) and the mouse aim point. Unticked keeps MW4's
-    controls.
+    `[controls] mw5=1` and, on a first install, `[aim] track_pointer=1`):
+    the MW5 key layout (new pilots get it automatically; existing pilots
+    via DEFAULT in Options > Controls) and the mouse aim point. Unticked
+    keeps MW4's controls. An update keeps an existing `track_pointer`
+    unless this checkbox is changed.
   - *Full company in campaign missions* (optional, experimental; writes
     `[campaign] full_company=1`): campaign missions that allow lancemates
     allow 7, including the Secondary Lance (issue #21).
@@ -39,8 +40,10 @@ restart itself elevated (`runas`, passing `--dir "<folder>"`, `--mw5` and
 
 - The hook files are replaced (not backed up, since they are ours), and the
   MW5 choice is applied.
-- The player's Throttle Decay, Gyro Aim and aim settings from the installed
-  `mw4hook.ini` are kept.
+- The player's Throttle Decay, Gyro Aim, aim point (`[aim] track_pointer`)
+  and other aim settings from the installed `mw4hook.ini` are kept. The aim
+  point is only realigned with `[controls] mw5` when the MW5 checkbox itself
+  changes.
 - The player's display settings in `options.ini` are kept. Only a first
   install writes the 1024x768 / 32-bit / Windowed keys; before 1.4 every
   update reset the resolution. An update repairs keys that are missing or
@@ -127,7 +130,10 @@ mw4patch.exe info      [install-dir]
 
 If `install-dir` is omitted, the current directory is used. Without `--mw5` /
 `--no-mw5`, install keeps the installed MW5 setting (off on a first install);
-the same for `--full-company` / `--no-full-company`.
+the same for `--full-company` / `--no-full-company`. A new `--mw5` /
+`--no-mw5` also sets `[aim] track_pointer` to match; otherwise an existing
+`track_pointer` is kept, so an update never turns off the aim point on its
+own.
 
 Examples:
 

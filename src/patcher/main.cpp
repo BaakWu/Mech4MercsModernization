@@ -31,7 +31,7 @@
 
 namespace {
 
-constexpr const wchar_t* kToolVersion = L"1.9.0";
+constexpr const wchar_t* kToolVersion = L"1.9.1";
 constexpr const char* kExpectedExeSha256 =
     "72bbb1ba3e5e5e7dc7607ca403f3d9aca301d0b16814a6b577bda7ec5c922b41";
 constexpr const wchar_t* kGameExe = L"MW4Mercs.exe";
@@ -972,8 +972,15 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1, in
         std::string text(ini.begin(), ini.end());
         SetIniValue(text, "controls", "mw5", use_mw5 ? "1" : "0");
         SetIniValue(text, "controls", "decay", decay ? "1" : "0");
-        // The mouse aim point is part of the MW5-style controls choice.
-        SetIniValue(text, "aim", "track_pointer", use_mw5 ? "1" : "0");
+        // The mouse aim point is part of the MW5-style controls choice, but
+        // an update must not turn off a setting the player enabled on its own
+        // (it also hides the Gyro Aim switch and the reticle aim). Keep it
+        // when the MW5 choice is unchanged; follow that choice when changed.
+        const int installed_track = InstalledIniInt(install, L"aim", L"track_pointer");
+        const bool mw5_unchanged = installed_mw5 < 0 || use_mw5 == (installed_mw5 == 1);
+        const bool use_track =
+            mw5_unchanged && installed_track >= 0 ? installed_track != 0 : use_mw5;
+        SetIniValue(text, "aim", "track_pointer", use_track ? "1" : "0");
         SetIniValue(text, "campaign", "full_company", use_company ? "1" : "0");
         // Player tuning kept from an existing install.
         if (FileExists(existing)) {
@@ -991,6 +998,7 @@ int CommandInstall(const std::wstring& install, bool assumeYes, int mw5 = -1, in
         }
         ini.assign(text.begin(), text.end());
         Print(L"MechWarrior 5-style controls: %ls\n", use_mw5 ? L"on" : L"off");
+        Print(L"Mouse aim point and Gyro Aim: %ls\n", use_track ? L"on" : L"off");
         Print(L"Full company in campaign missions: %ls\n", use_company ? L"on" : L"off");
     }
     std::string dinputHash;
