@@ -41,43 +41,50 @@ memory after the PECompact stub has unpacked the image.
   The options screen has no Cancel (OK always saves); the Video tab's
   **Reset** button restores the resolution *and* the Windowed setting to their
   values from when the tab was opened.
-- Sizes larger than the monitor: in a framed window the window is shrunk to
-  fit the work area with the aspect kept; the game still renders at the
-  chosen size and the picture is scaled.
-- **The list stops at 1920x1200** (issue #38). 3.1c's own list has 29
-  sizes, up to 2560x1600, 3840x2400 and three monitor-spanning sizes
-  (3072x768, 4320x900, 5040x1050). None of those can be played; each one
-  crashed or hung the game at the next mission start:
-  - **Direct3D 7 caps the render size at 2048 px.** `IDirect3D7::CreateDevice`
-    in Windows' own `d3dim700.dll` (10.0.26100.5074, at `0x1000536C`) compares
-    the render target's width and height with `0x800` and returns
+- Sizes larger than the monitor: the list is the same on every machine;
+  rows that fit the primary monitor are white and larger ones red. In a
+  framed window the window is shrunk to fit the work area with the aspect
+  kept; the game still renders at the chosen size and the picture is
+  scaled.
+- **The list goes up to 4K** (issue #38): 28 sizes, from 640x480 to
+  3840x2160, including 2560x1200, 2560x1440, 2560x1600 and 3440x1440.
+  2048x1536 remains out (it still stops on the loading screen; cause not
+  found). Two runtime fixes make the larger sizes playable:
+  - **Direct3D 7's artificial 2048 px limit.** `IDirect3D7::CreateDevice` in
+    Windows' own `d3dim700.dll` (10.0.26100.5074) compares the render
+    target's width and height with `0x800` and returns
     `DDERR_INVALIDOBJECT` (`0x88760082`) above it, whatever the card
-    reports (16384x16384 on the test Radeon). GameOS then crashes. A
-    standalone probe confirmed it: 2048x2048 works, 2049x1080 and 1080x2049
-    fail.
+    reports (16384x16384 on the test Radeon). This build has two copies of
+    the check (`B8 00 08 00 00 39`). The `ddraw.dll` proxy changes both
+    immediates to `-1` in memory, before GameOS creates a device; no
+    system file is touched. `Mw4D3DLimitRemoved` reports whether it
+    worked, and the list omits sizes above 2048 if it did not.
   - **The HUD only knows certain screen heights.**
     `HUDNumberText::GetIndex` (`0x00563A70`) picks the HUD's number font by
     screen height. It knows 480, 600, 720, 768, 800, 854, 864, 900, 960,
-    1024, 1050, 1080, 1200, 1536, 1600 and 2400. Any other height (1152,
-    1440, 1800, 2160) raises "unknown screen size in HUDNumberText::GetIndex"
-    through the game's error dialog, which never shows, so the mission load
-    waits forever.
-  - **2048x1536 also stops on the loading screen**, although Direct3D accepts
-    it (cause not found).
+    1024, 1050, 1080, 1200, 1536, 1600 and 2400. 1440 and 2160 take its
+    error path (0x563D01), whose dialog never shows, so the mission load
+    waits forever. The display hook maps 1440 to the 1600 text set and 2160
+    to the 2400 set for the duration of the call, then restores the real
+    height. The list omits 1440/2160 if that hook could not be installed.
+  - The HUD atlas sharpener (`[hud] sharp`) copies the 256x256 atlases by a
+    power-of-two factor, 2x up to 1200 and 4x above that, so the atlases
+    stay power-of-two textures at 1440p/4K.
 
-  So after the game fills the list (ShellGetSupportedResolutions, shell
-  callback 124, `0x0051CD50`), the hook rewrites it in place with the other 23
-  sizes and maps the rows to them. Rows that fit the primary monitor are
-  white and larger ones red; under the patch the game's own check (a
-  fullscreen display mode) had made every row red. A saved size that cannot
-  be played (an older `options.ini`) is replaced at startup by the listed
-  size of the closest shape that fits inside it (2560x1600 → 1920x1200,
-  3840x2160 → 1920x1080), and saved on the next OK. **On a larger monitor,
-  Windowed off (borderless) scales the mission to fill the screen.**
-- Verified (2026-11-21, 2560x1440 monitor): the list ends at 1920x1200, all
-  rows white. An `options.ini` with 2560x1600, which crashed before, started
-  at 1920x1200 and played a mission at about 200 fps. Choosing 1600x1200 and
-  OK saved `screenwidth=1600` / `screenheight=1200`.
+  After the game fills the list (ShellGetSupportedResolutions, shell
+  callback 124, `0x0051CD50`), the hook rewrites it in place with its 28
+  sizes and maps the rows to them. A saved size that cannot be played (an
+  older `options.ini`, or a size whose fix failed) is replaced at startup
+  by the listed size of the closest shape that fits inside it
+  (2048x1536 → 1600x1200), and saved on the next OK. **On a larger
+  monitor, Windowed off (borderless) scales the mission to fill the
+  screen.**
+- Verified (2026-11-21, 2560x1440 monitor): missions load and render at
+  2560x1440 (~150-160 fps), 2560x1600, 3440x1440 (~135 fps) and 3840x2160
+  (~130 fps; the borderless window is clamped to the 2560x1440 monitor and
+  the picture is scaled). The Video tab shows the selected size (including
+  3840 x 2160) and the list log reports 28 of 28 sizes. A 4K mission renders
+  the HUD at the 2400 text set with 1024x1024 sharpened atlases.
 - **Never 16-bit:** 16-bit requests are raised to 32-bit, and the 16-bit
   fallbacks in GameOS' (now unused) fullscreen setup are raised to 32-bit.
 - DPI: the process opts out of DPI virtualization, so one game pixel is one
@@ -1062,8 +1069,8 @@ Alt+Enter updates the box). Like the script's own `dRes`, a `dWin` variable
 records the setting when the tab opens, and the Reset button's handler sets it
 back next to `dRes`. The rewritten script uses all but 14 bytes of the buffer.
 
-The Resolution dropdown lists the 29 sizes returned by the game's
-`ShellGetSupportedResolutions` (MekTek's list), not the retail game's five.
+The Resolution dropdown lists the hook's 28 general sizes (issue #38),
+not the game's 29-entry table or the retail game's five.
 The list opens where it was last scrolled, each arrow click scrolls two rows,
 and like every shell button an entry only takes a click after the pointer has
 rested on it briefly (normal for this UI; automated tests must hover first). They talk to the hook through the game's own
@@ -1080,6 +1087,8 @@ game's handler sees it.
 | `#VBD` member fetch | `0x00419150` | 7-byte detour (shell scripts; sharper HUD images and roster names) |
 | fullscreen 16-bit (renderer path) | `0x0070FECC` | `0x10` -> `0x20` |
 | fullscreen 16-bit (last resort) | `0x007100F0`, `0x007100FA` | `0x10` -> `0x20` |
+| `HUDNumberText::GetIndex` | `0x00563A70` | 7-byte detour (1440/2160 use the 1600/2400 text sets) |
+| Direct3D 7 2048 check | `d3dim700.dll`, both `B8 00 08 00 00 39` sites | immediate `0x800` -> `-1` in memory (no system file change) |
 | `IDirect3DDevice7::Clear` | ddraw.dll vtable slot 10 | retry failed Clear without stencil / depth |
 | `IDirectDraw7::CreateSurface` | ddraw.dll vtable slot 6 | retry failed 32-bit depth request as D24S8/D24X8 |
 | `IDirectDrawSurface7::Blt` | ddraw.dll vtable slot 5 | present scaling; window DC off the main monitor; aim marker |
@@ -1109,6 +1118,7 @@ checkbox=1    ; add the Windowed checkbox to Options > Video
 clear_fix=1   ; (default, not in the shipped ini) stop the per-frame rebuild
 zbuffer_fix=1 ; (default, not in the shipped ini) 24-bit depth instead of 16
 depth_fix=1   ; (default, not in the shipped ini) bind the attached depth buffer
+resolution_hack=1 ; (default, not in the shipped ini) remove D3D7's 2048 px limit
 [controls]
 mw5=0         ; faster W/S + DEFAULT applies the MW5 key layout
 decay=0       ; Throttle Decay (also Options > Game; written there)
@@ -1123,7 +1133,7 @@ default_camo=None ; a new pilot's camouflage (code char, or None; empty = Pink)
 [campaign]
 full_company=0 ; 7 lancemates in campaign missions that allow 1-6 (opt-in)
 [hud]
-sharp=1       ; sharper HUD text images (2-4x, by resolution)
+sharp=1       ; sharper HUD text images (2x up to 1200, 4x above)
 names=1       ; roster 'Mech names redrawn from the MicroStyle font
 [sound]
 background=1  ; keep the audio playing when the window is not focused

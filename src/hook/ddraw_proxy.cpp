@@ -50,6 +50,8 @@ bool g_capture_enabled = false;
 bool g_clear_fix = true;
 bool g_zbuffer_fix = true;
 bool g_depth_fix = true;
+bool g_resolution_hack = true;
+bool g_d3d_limit_removed = false;
 bool g_d3d_trace = false;
 // Trace counters: DP, DIP, DPVB, DIPVB, skipped, devices created.
 volatile LONG g_draw_counts[6] = {};
@@ -76,6 +78,65 @@ void Log(const char* fmt, ...) {
     WriteFile(g_log, buffer, static_cast<DWORD>(n), &written, nullptr);
 }
 
+// Legacy Direct3D 7 refuses a render target wider or taller than 2048
+// (d3dim700.dll: "mov eax,800h; cmp; ja"). It is an artificial runtime
+// check, not a hardware limit. Patch the immediate to -1 in memory; no
+// system file is changed. The display list only offers >2048 sizes when this
+// succeeded (Mw4D3DLimitRemoved, used by display.cpp). Issue #38.
+void PatchD3DimLimit() {
+    if (!g_resolution_hack) {
+        Log("d3dim: resolution hack off\n");
+        return;
+    }
+    wchar_t path[MAX_PATH];
+    UINT n = GetSystemDirectoryW(path, MAX_PATH);
+    if (n == 0 || n + 20 >= MAX_PATH) {
+        Log("d3dim: system path unavailable\n");
+        return;
+    }
+    wcscat_s(path, L"\\d3dim700.dll");
+    HMODULE d3dim = LoadLibraryW(path);
+    if (!d3dim) {
+        Log("d3dim: load failed (%lu)\n", GetLastError());
+        return;
+    }
+    auto* dos = reinterpret_cast<PIMAGE_DOS_HEADER>(d3dim);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        Log("d3dim: bad header\n");
+        return;
+    }
+    auto* nt = reinterpret_cast<PIMAGE_NT_HEADERS>(
+        reinterpret_cast<unsigned char*>(d3dim) + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) {
+        Log("d3dim: bad NT header\n");
+        return;
+    }
+    const unsigned char* base =
+        reinterpret_cast<const unsigned char*>(d3dim) + nt->OptionalHeader.BaseOfCode;
+    const size_t size = nt->OptionalHeader.SizeOfCode;
+    const unsigned char wanted[] = {0xB8, 0x00, 0x08, 0x00, 0x00, 0x39};
+    int patched = 0;
+    for (size_t i = 0; i + sizeof(wanted) <= size; ++i) {
+        if (memcmp(base + i, wanted, sizeof(wanted)) == 0) {
+            DWORD old = 0;
+            void* immediate = const_cast<unsigned char*>(base + i + 1);
+            if (VirtualProtect(immediate, 4, PAGE_EXECUTE_READWRITE, &old)) {
+                *static_cast<DWORD*>(immediate) = 0xFFFFFFFFu;
+                VirtualProtect(immediate, 4, old, &old);
+                ++patched;
+                Log("d3dim: 2048 check removed at %p\n", immediate);
+            }
+            i += sizeof(wanted) - 1;
+        }
+    }
+    g_d3d_limit_removed = patched > 0;
+    if (!patched) {
+        Log("d3dim: 2048 check not found\n");
+    } else {
+        Log("d3dim: %d check(s) removed\n", patched);
+    }
+}
+
 void LoadConfig() {
     wchar_t path[MAX_PATH];
     DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
@@ -98,6 +159,7 @@ void LoadConfig() {
     g_clear_fix = GetPrivateProfileIntW(L"display", L"clear_fix", 1, path) != 0;
     g_zbuffer_fix = GetPrivateProfileIntW(L"display", L"zbuffer_fix", 1, path) != 0;
     g_depth_fix = GetPrivateProfileIntW(L"display", L"depth_fix", 1, path) != 0;
+    g_resolution_hack = GetPrivateProfileIntW(L"display", L"resolution_hack", 1, path) != 0;
     g_d3d_trace = GetPrivateProfileIntW(L"debug", L"d3d_trace", 0, path) != 0;
     if (GetPrivateProfileIntW(L"log", L"enabled", 1, path) == 0) {
         return;
@@ -2175,12 +2237,17 @@ extern "C" HRESULT WINAPI Proxy_DirectDrawCreateEx(GUID* guid, void** out,
     return result;
 }
 
+extern "C" __declspec(dllexport) int Mw4D3DLimitRemoved() {
+    return g_d3d_limit_removed ? 1 : 0;
+}
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
         InitializeCriticalSection(&g_view_lock);
         LoadConfig();
         Log("ddraw proxy attached\n");
+        PatchD3DimLimit();
         Resolve("DirectDrawCreate");
         g_pfn_AcquireDDThreadLock = reinterpret_cast<void*>(Resolve("AcquireDDThreadLock"));
         g_pfn_CompleteCreateSysmemSurface = reinterpret_cast<void*>(Resolve("CompleteCreateSysmemSurface"));

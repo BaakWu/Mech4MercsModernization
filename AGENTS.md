@@ -237,11 +237,13 @@ The first release should make this existing menu work correctly on modern
 Windows first.
 
 3.1c's list has 29 sizes (up to 2560x1600, 3840x2400 and three spanning
-sizes). Decided 2026-11-21 (issue #38): nothing above 1920x1200 can be
-played. Direct3D 7 (Windows' `d3dim700.dll`) refuses render targets over
-2048 px, and the HUD only knows certain screen heights (no 1440 / 2160). The
-hook lists the 23 playable sizes and replaces a saved unplayable one; large
-monitors use Windowed off, which scales the picture (`docs/HOOK.md`).
+sizes). Updated 2026-11-21 (issue #38): the hook now lists 28 general sizes
+up to 3840x2160, including 1440p, 1600p and 3440x1440. Two in-memory fixes
+make them playable: `d3dim700.dll` has two 2048 px render-target checks
+(the ddraw proxy patches both), and `HUDNumberText::GetIndex` has no 1440 or
+2160 text sets (detoured to the 1600/2400 sets). 2048x1536 still stops on
+the loading screen and stays out. Large monitors use Windowed off, which
+scales the picture (`docs/HOOK.md`).
 
 ### 4.4 The decompilation is a different binary
 
@@ -528,6 +530,13 @@ High-value files:
   - writes `mw4patch-install.ini` with installed hashes and backup names,
   - supports `uninstall`/rollback and `verify`/`info` commands.
   See `docs/PATCHER.md`.
+- Issue #38 (2026-11-21): the resolution list goes up to 4K. The ddraw proxy
+  removes both `d3dim700.dll` 2048 px checks in memory
+  (`Mw4D3DLimitRemoved`), the display hook maps the unsupported 1440/2160 HUD
+  heights to the 1600/2400 text sets, and the HUD atlas sharpener uses
+  power-of-two copies. 2560x1440, 2560x1600, 3440x1440 and 3840x2160 missions
+  load and render on the 2560x1440 test monitor (4K is scaled by the
+  borderless window). `docs/HOOK.md`.
 
 ### Open
 

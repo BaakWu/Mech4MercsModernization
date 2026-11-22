@@ -74,28 +74,31 @@ constexpr int kTextTypeSpecial2 = 5;  // TEXT_TYPE_SPECIAL2 (red), the game's "u
 
 // Options > Video > Screen Resolution (issue #38). The game fills the list
 // from a fixed table of 29 sizes (0x0081DCC0) and the 29 labels built from it
-// at startup. Six of them cannot be played; choosing one crashed or hung the
-// game at the next mission start:
+// at startup. Its large sizes used to crash or hang at the next mission:
 //   - 2560x1600, 3840x2400, 3072x768, 4320x900, 5040x1050: Direct3D 7's
 //     CreateDevice (d3dim700.dll, Windows' own runtime) refuses a render
 //     target wider or taller than 2048 (mov eax,800h; cmp; ja ->
 //     DDERR_INVALIDOBJECT), whatever the card reports (16384 here); GameOS
-//     then crashes.
+//     then crashes. The ddraw proxy removes that check in memory
+//     (Mw4D3DLimitRemoved), so this list also offers sizes above 2048.
+//   - 1440p/4K are not in the game's table at all: HUDNumberText::GetIndex
+//     (0x00563A70) has no 1440 or 2160 text set, and its error dialog never
+//     shows, so the mission load waited forever. The display hook maps them
+//     to the 1600/2400 sets (Hook_HudNumberIndex); without that hook the list
+//     omits them.
 //   - 2048x1536: the device is made, but the mission load stops on the
-//     loading screen (cause not found).
-// Nor can sizes outside the game's list be added: HUDNumberText::GetIndex
-// (0x00563A70) only knows the screen heights 480, 600, 720, 768, 800, 854,
-// 864, 900, 960, 1024, 1050, 1080, 1200, 1536, 1600 and 2400; any other
-// (1152, 1440, 1800, 2160) raises a game error whose dialog never shows, and
-// the mission load waits for it forever.
-// So the list offers the other 23 sizes, in the game's order. For a large
-// monitor, Windowed off (borderless) scales the mission to fill the screen.
-constexpr int kListCount = 23;
+//     loading screen (cause not found; still left out).
+// The hook writes its own list, so it can also offer sizes the game's table
+// lacks (1440p, 4K). The list is the same on every monitor; sizes larger than
+// the screen are shown in red, and with Windowed off (borderless) they are
+// scaled to fill the screen.
+constexpr int kListCount = 28;
 constexpr DWORD kResolutions[kListCount * 2] = {
     640,  480,  800,  600,  960,  600,  1024, 768,  1152, 768,  1152, 864,
     1280, 720,  1280, 768,  1280, 800,  1280, 854,  1280, 960,  1280, 1024,
     1360, 768,  1366, 768,  1400, 1050, 1440, 900,  1440, 960,  1600, 900,
-    1600, 1024, 1600, 1200, 1680, 1050, 1920, 1080, 1920, 1200,
+    1600, 1024, 1600, 1200, 1680, 1050, 1920, 1080, 1920, 1200, 2560, 1200,
+    2560, 1440, 2560, 1600, 3440, 1440, 3840, 2160,
 };
 
 using SetScreenMode_t = void(__stdcall*)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
@@ -119,6 +122,108 @@ volatile DWORD* g_mission_height = nullptr;
 // (ListResolutions).
 const DWORD* g_resolutions = nullptr;
 int g_resolution_count = kResolutionCount;
+DWORD g_list[kListCount * 2] = {};
+int g_list_count = 0;
+
+// The ddraw proxy removes Direct3D 7's 2048 width/height check in memory
+// (issue #38). Without it, the sizes above 2048 would fail at device
+// creation; keep them out of the list then.
+bool D3DLimitRemoved() {
+    static int cached = -1;
+    if (cached < 0) {
+        HMODULE ddraw = GetModuleHandleW(L"ddraw.dll");
+        if (!ddraw) {
+            // ddraw, and with it the d3dim700 patch, loads when the game
+            // first renders. Accept the size for now; the list is built
+            // later, when the patch result is known.
+            return true;
+        }
+        auto fn = reinterpret_cast<int (*)()>(
+            GetProcAddress(ddraw, "Mw4D3DLimitRemoved"));
+        cached = fn && fn() ? 1 : 0;
+    }
+    return cached == 1;
+}
+
+bool BigSizeAllowed(int w, int h) {
+    return (w <= 2048 && h <= 2048) || D3DLimitRemoved();
+}
+
+// HUDNumberText::GetIndex (0x00563A70) only has text sets for the heights
+// 480, 600, 720, 768, 800, 854, 864, 900, 960, 1024, 1050, 1080, 1200, 1536,
+// 1600 and 2400. Any other height takes its error path (0x563D01), whose
+// dialog never appears, and the mission load waits forever. Give 1440p and 4K
+// the nearest set for the duration of the call; the real height is restored
+// immediately. Issue #38.
+volatile DWORD* g_screen_height = nullptr;  // 0x124066C
+using HudIndex_t = int(__stdcall*)(int);
+HudIndex_t g_hud_index = nullptr;
+bool g_hud_height_fix = false;
+
+int __stdcall Hook_HudNumberIndex(int kind) {
+    if (!g_hud_index) {
+        return 0;
+    }
+    const DWORD height = g_screen_height ? *g_screen_height : 0;
+    DWORD mapped = height;
+    if (height == 1440) {
+        mapped = 1600;
+    } else if (height == 2160) {
+        mapped = 2400;
+    }
+    static DWORD logged[16] = {};
+    static int logged_count = 0;
+    bool seen = false;
+    for (int i = 0; i < logged_count; ++i) {
+        if (logged[i] == height) {
+            seen = true;
+        }
+    }
+    if (!seen && logged_count < 16) {
+        logged[logged_count++] = height;
+        Log("display: HUD text height %lu (kind %d)\n", height, kind);
+    }
+    if (mapped != height && g_screen_height) {
+        *g_screen_height = mapped;
+    }
+    const int result = g_hud_index(kind);
+    if (mapped != height && g_screen_height) {
+        *g_screen_height = height;
+    }
+    return result;
+}
+
+// 1440 and 2160 need the HUD-number height hook above. Checked only once the
+// hooks are in place (the list is built and missions start later).
+bool HudHeightAllowed(int h) {
+    return (h != 1440 && h != 2160) || g_hud_height_fix;
+}
+
+// The dropdown is general, not limited to the current monitor: every curated
+// size is written, larger ones in red. Only sizes one of the two fixes above
+// cannot play are omitted.
+void BuildResolutionList() {
+    static bool built = false;
+    if (built) {
+        return;
+    }
+    built = true;
+    g_list_count = 0;
+    for (int i = 0; i < kListCount; ++i) {
+        const int w = static_cast<int>(kResolutions[i * 2]);
+        const int h = static_cast<int>(kResolutions[i * 2 + 1]);
+        if (!BigSizeAllowed(w, h) || !HudHeightAllowed(h)) {
+            continue;
+        }
+        g_list[g_list_count * 2] = static_cast<DWORD>(w);
+        g_list[g_list_count * 2 + 1] = static_cast<DWORD>(h);
+        ++g_list_count;
+    }
+    g_resolutions = g_list;
+    g_resolution_count = g_list_count;
+    Log("display: resolution list %d of %d sizes (D3D 2048 check %s)\n",
+        g_list_count, kListCount, D3DLimitRemoved() ? "removed" : "present");
+}
 
 bool g_windowed = true;
 int g_sel_width = 1024;
@@ -176,6 +281,9 @@ int ResolutionIndex(int w, int h) {
 }
 
 bool Playable(int w, int h) {
+    if (!BigSizeAllowed(w, h)) {
+        return false;
+    }
     for (int i = 0; i < kListCount; ++i) {
         if (static_cast<int>(kResolutions[i * 2]) == w &&
             static_cast<int>(kResolutions[i * 2 + 1]) == h) {
@@ -185,10 +293,11 @@ bool Playable(int w, int h) {
     return false;
 }
 
-// A size the game cannot play (one of the six removed from the list, from an
-// older options.ini) is replaced by the listed size of the closest shape
-// that fits inside it, the largest of those (2560x1600 -> 1920x1200,
-// 3840x2160 -> 1920x1080, 2048x1536 -> 1600x1200, 5040x1050 -> 1600x900).
+// A size the game cannot play (2048x1536, one of the game's other removed
+// sizes, or a large size when the D3D patch is missing, from an older
+// options.ini) is replaced by the listed size of the closest shape that fits
+// inside it, the largest of those (2048x1536 -> 1600x1200,
+// 3840x2400 -> 1920x1200, 5040x1050 -> 1600x900).
 void PlayableSize(int* w, int* h) {
     if (Playable(*w, *h)) {
         return;
@@ -199,7 +308,7 @@ void PlayableSize(int* w, int* h) {
     for (int i = 0; i < kListCount; ++i) {
         const int cw = static_cast<int>(kResolutions[i * 2]);
         const int ch = static_cast<int>(kResolutions[i * 2 + 1]);
-        if (cw > *w || ch > *h) {
+        if (cw > *w || ch > *h || !BigSizeAllowed(cw, ch)) {
             continue;
         }
         const double diff = std::fabs(static_cast<double>(cw) / ch - aspect);
@@ -239,7 +348,8 @@ bool ListResolutions(const int* args) {
         if (!items || !types || !count || *count != kResolutionCount) {
             return false;
         }
-        for (int i = 0; i < kListCount; ++i) {
+        BuildResolutionList();
+        for (int i = 0; i < g_resolution_count; ++i) {
             if (!items[i] || IsBadWritePtr(items[i], 16)) {
                 return false;
             }
@@ -247,20 +357,20 @@ bool ListResolutions(const int* args) {
         const DWORD screen_w = static_cast<DWORD>(GetSystemMetrics(SM_CXSCREEN));
         const DWORD screen_h = static_cast<DWORD>(GetSystemMetrics(SM_CYSCREEN));
         int fit = 0;
-        for (int i = 0; i < kListCount; ++i) {
-            const DWORD w = kResolutions[i * 2];
-            const DWORD h = kResolutions[i * 2 + 1];
+        for (int i = 0; i < g_resolution_count; ++i) {
+            const DWORD w = g_resolutions[i * 2];
+            const DWORD h = g_resolutions[i * 2 + 1];
             sprintf_s(items[i], 16, "%lu x %lu", w, h);
             const bool fits = w <= screen_w && h <= screen_h;
             types[i] = fits ? kTextTypeNormal : kTextTypeSpecial2;
             fit += fits ? 1 : 0;
         }
-        *count = kListCount;
+        *count = g_resolution_count;
         static bool logged = false;
         if (!logged) {
             logged = true;
             Log("display: resolution list written (%d sizes, %d fit the %lux%lu monitor)\n",
-                kListCount, fit, screen_w, screen_h);
+                g_resolution_count, fit, screen_w, screen_h);
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -286,6 +396,17 @@ void __stdcall Hook_SetScreenMode(DWORD width, DWORD height, DWORD bpp, DWORD de
     SyncGameSelectedSize();
     const bool shell = req_w == 800 && req_h == 600;
     if (!shell) {
+        if (!BigSizeAllowed(g_sel_width, g_sel_height) ||
+            !HudHeightAllowed(g_sel_height)) {
+            // One of the issue #38 fixes failed, so a size saved by an older
+            // run may not be playable; fall back to the nearest listed size.
+            PlayableSize(&g_sel_width, &g_sel_height);
+            if (!HudHeightAllowed(g_sel_height)) {
+                g_sel_width = 1920;
+                g_sel_height = 1200;
+                Log("display: HUD height fallback missing; using 1920x1200\n");
+            }
+        }
         width = static_cast<DWORD>(g_sel_width);
         height = static_cast<DWORD>(g_sel_height);
     }
@@ -405,8 +526,7 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
         // index below already maps onto these rows.
         const int result = g_shell_callback(a1, a2, args);
         if (ListResolutions(args)) {
-            g_resolutions = kResolutions;
-            g_resolution_count = kListCount;
+            // BuildResolutionList set g_resolutions/g_resolution_count.
         } else {
             Log("display: resolution list not as expected; the game's list is kept\n");
         }
@@ -872,6 +992,15 @@ bool InstallDisplayHooks() {
     SkipTextureMemoryTest();
     AcceptDeviceCaps();
     InstallRendererTrace();
+
+    if (unsigned char* hud = FindUnique(
+            "hud_number_index", "55 8B EC 56 8B 75 08 83 FE F8 0F 85")) {
+        g_screen_height = reinterpret_cast<volatile DWORD*>(0x124066C);
+        g_hud_height_fix =
+            InstallDetour(hud, 7, reinterpret_cast<void*>(&Hook_HudNumberIndex),
+                          reinterpret_cast<void**>(&g_hud_index)) != nullptr;
+    }
+    Log("display: HUD height fallback %s\n", g_hud_height_fix ? "ok" : "failed");
 
     InstallDetour(ssm, 9, reinterpret_cast<void*>(&Hook_SetScreenMode),
                   reinterpret_cast<void**>(&g_set_screen_mode));

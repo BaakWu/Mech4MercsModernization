@@ -496,13 +496,18 @@ void RedrawNames(bool hud6a, unsigned char* pixels, int W, int H, int factor, bo
         hud6a ? "hud6a" : "hud5m", font->cap_bottom - font->cap_top, cap);
 }
 
-// Texels per original texel: the HUD scale (screen height / 600) rounded up,
-// so the atlas is drawn close to 1:1 on screen.
+// Texels per original texel: the HUD scale (screen height / 600) rounded up
+// to a power of two (2x up to 1200, 4x above), so the atlas is drawn close to
+// 1:1 on screen and every copy stays a power-of-two texture, which Direct3D 7
+// handles everywhere. Issue #38.
 int HudFactor() {
     int w = 0, h = 0;
     SelectedSize(&w, &h);
-    int f = static_cast<int>(std::ceil(h / 600.0));
-    return f < 2 ? 2 : (f > kMaxFactor ? kMaxFactor : f);
+    int f = 2;
+    while (f < kMaxFactor && f * 600 < h) {
+        f *= 2;
+    }
+    return f;
 }
 
 }  // namespace
