@@ -52,6 +52,22 @@ constexpr int kShellCreateNewPilot = 18;
 constexpr int kShellSelectPilot = 19;
 constexpr int kShellRenamePilot = 21;
 constexpr int kShellGetSupportedResolutions = 124;
+constexpr int kShellGetJoyStickNames = 200;
+constexpr int kShellGetJoyListSelected = 207;
+constexpr int kShellSetJoyListSelected = 218;
+
+int g_joystick_count = 0;
+
+void SaveJoystickNone(bool disabled) {
+    wchar_t path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    wchar_t* slash = len ? wcsrchr(path, L'\\') : nullptr;
+    if (!slash) {
+        return;
+    }
+    wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"mw4hook.ini");
+    WritePrivateProfileStringW(L"input", L"joystick_none", disabled ? L"1" : L"0", path);
+}
 constexpr int kResolutionCount = 29;
 constexpr int kTextTypeNormal = 0;    // listboxes.script TEXT_TYPE_NORMAL (white)
 constexpr int kTextTypeSpecial2 = 5;  // TEXT_TYPE_SPECIAL2 (red), the game's "unsupported"
@@ -341,6 +357,33 @@ int CallOriginal(DWORD a1, DWORD a2, int cmd, int option, int* value) {
 
 int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
     const int cmd = args ? args[0] : -1;
+    // Joystick list (issue #40 follow-up): the script adds a "None" item at
+    // index = device count. Remember the count, show None when selected, and
+    // stop passing input when None is picked.
+    if (cmd == kShellGetJoyStickNames && args && args[1]) {
+        const int result = g_shell_callback(a1, a2, args);
+        g_joystick_count = *reinterpret_cast<int*>(args[1]);
+        return result;
+    }
+    if (cmd == kShellGetJoyListSelected && args && args[1]) {
+        const int result = g_shell_callback(a1, a2, args);
+        if (JoystickDisabled() && g_joystick_count > 0) {
+            *reinterpret_cast<int*>(args[1]) = g_joystick_count;
+        }
+        return result;
+    }
+    if (cmd == kShellSetJoyListSelected && args && args[1]) {
+        const int value = *reinterpret_cast<int*>(args[1]);
+        if (g_joystick_count > 0) {
+            const bool none = value >= g_joystick_count;
+            SetJoystickDisabled(none);
+            SaveJoystickNone(none);
+            if (none) {
+                return 0;  // keep the game's previous index; input is off
+            }
+        }
+        return g_shell_callback(a1, a2, args);
+    }
     if (GetConfig().debug_automation && (cmd == 100 || cmd == 101)) {
         // Test aid: how the Controls screen passes a key binding.
         auto show = [](int v) {

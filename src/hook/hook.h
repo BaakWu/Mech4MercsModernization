@@ -86,6 +86,7 @@ struct Config {
     bool input_controllers = true;    // [input] controllers: open game controllers (#34)
     bool input_other_devices = false;  // [input] other_devices: also non-controller HID devices (#34)
     bool input_gamepad_layout = true;  // [input] gamepad_layout: MW5-style gamepad axes (#42)
+    bool input_joystick_none = false;  // [input] joystick_none: Joystick list = None
     // [mechlab] default_camo: a new pilot's default camouflage code (the first
     // character of MekTek's camouflage name; '_' = None; empty = template's).
     char default_camo = '_';
@@ -108,6 +109,11 @@ int GamepadThrottle();
 void SetGamepadAxes(int right_x, int right_y);  // -1000..1000
 int GamepadRightX();
 int GamepadRightY();
+
+// Options > Controls > Joystick > None: no joystick input until a device is
+// picked again. Saved as [input] joystick_none.
+bool JoystickDisabled();
+void SetJoystickDisabled(bool disabled);
 
 // Refuse the game's own Assets\Binaries\imagehlp.dll (imagehlp.cpp, #35).
 void InstallImagehlpRedirect();

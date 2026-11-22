@@ -146,6 +146,7 @@ bool IsGamepadObject(void* object) {
 volatile LONG g_gamepad_throttle = 0;
 volatile LONG g_gamepad_right_x = 0;
 volatile LONG g_gamepad_right_y = 0;
+volatile LONG g_joystick_disabled = 0;
 
 void PatchDevice(void* device, bool gamepad);
 
@@ -153,6 +154,14 @@ HRESULT WINAPI Hook_GetDeviceState(void* self, DWORD size, void* data) {
     auto original = reinterpret_cast<GetDeviceState_t>(
         FindOriginal(g_state_tables, VtableOf(self)));
     HRESULT result = original(self, size, data);
+    if (mw4hook::JoystickDisabled() && data && (size == 80 || size == 272)) {
+        // Options > Controls > Joystick > None: no joystick input, whatever
+        // the game still polls. Centered axes, no buttons, no throttle.
+        memset(data, 0, size);
+        mw4hook::SetGamepadThrottle(0);
+        mw4hook::SetGamepadAxes(0, 0);
+        return S_OK;
+    }
     if (mw4hook::GetConfig().input_gamepad_layout && IsGamepadObject(self)) {
         if (SUCCEEDED(result) && data && (size == 80 || size == 272)) {
             // MW5 sticks in the axes the game uses: X = turn, Y = pitch,
@@ -632,6 +641,19 @@ void SetGamepadAxes(int right_x, int right_y) {
     InterlockedExchange(&g_gamepad_right_y, right_y);
 }
 
+bool JoystickDisabled() {
+    return InterlockedCompareExchange(&g_joystick_disabled, 0, 0) != 0;
+}
+
+void SetJoystickDisabled(bool disabled) {
+    InterlockedExchange(&g_joystick_disabled, disabled ? 1 : 0);
+    if (disabled) {
+        SetGamepadThrottle(0);
+        SetGamepadAxes(0, 0);
+    }
+    Log("input: joystick %s (Options > Controls)\n", disabled ? "None" : "enabled");
+}
+
 int GamepadRightX() {
     return static_cast<int>(InterlockedCompareExchange(&g_gamepad_right_x, 0, 0));
 }
@@ -641,6 +663,7 @@ int GamepadRightY() {
 }
 
 void ResolveDinputExports() {
+    SetJoystickDisabled(GetConfig().input_joystick_none);
     MW4_RESOLVE(DirectInputCreateA);
     MW4_RESOLVE(DirectInputCreateW);
     MW4_RESOLVE(DirectInputCreateEx);

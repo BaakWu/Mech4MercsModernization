@@ -444,6 +444,15 @@ The Logitech Extreme 3D is subtype 1 (traditional/unknown), so it keeps the
 stock axes. The gamepad's face buttons still use the game's joystick bindings;
 the full MW5 button layout is issue #42's follow-up.
 
+**Joystick > None.** The Joystick list gets a **None** item after the devices
+(`OM_Controls.script` is rewritten in memory, like the Windowed checkbox).
+Selecting it writes `[input] joystick_none=1` and zeroes every joystick's
+`GetDeviceState` result (centered axes, no buttons, no throttle), so the
+game's own polling cannot move the 'Mech; keyboard and mouse keep working.
+The controllers stay in the list, and picking one clears the flag and turns
+the joystick back on. The script's remap poller is guarded so the None index
+(out of range) is never passed to `js_getbutton`/`js_getaxis`.
+
 ### Direct3D: per-frame display rebuild, depth buffer
 
 Found 2026-11-16 by A/B with all display features disabled (the stock game

@@ -76,7 +76,7 @@ void __fastcall Hook_Drive(char* self, void*, double now) {
     // and holds like W/S (and Throttle Decay applies); the right stick is
     // remapped to pitch/torso in the dinput proxy. Centered leaves the
     // keyboard counters alone.
-    if (GetConfig().input_gamepad_layout) {
+    if (!JoystickDisabled() && GetConfig().input_gamepad_layout) {
         const int stick = GamepadThrottle();
         // DirectInput's Y axis is positive towards the player (the stock
         // game's Invert Y Axis); pushing the stick forward is negative.
@@ -155,7 +155,7 @@ void __fastcall Hook_Drive(char* self, void*, double now) {
     // right stick. The stock axis mapping is off for a gamepad (Z/Rx also
     // drive the throttle), so this is what makes right stick X twist and Y
     // pitch. The aim point follows through AimAfterDrive below.
-    if (GetConfig().input_gamepad_layout) {
+    if (!JoystickDisabled() && GetConfig().input_gamepad_layout) {
         const int right_x = GamepadRightX();
         const int right_y = GamepadRightY();
         if (right_x > kGamepadDeadzone || right_x < -kGamepadDeadzone) {

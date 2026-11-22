@@ -29,6 +29,7 @@ using MemberFetch_t = void(__fastcall*)(unsigned char* entry, void* edx, void* a
 MemberFetch_t g_member_fetch = nullptr;
 
 constexpr char kTargetName[] = "mercsshellscripts\\OM_Video.script";
+constexpr char kControlsTarget[] = "mercsshellscripts\\OM_Controls.script";
 constexpr char kGameTarget[] = "mercsshellscripts\\OM_Game.script";
 constexpr char kJoinTarget[] = "mercsshellscripts\\JoinRegimentModal.script";
 constexpr char kMainMenuTarget[] = "mercsshellscripts\\MainMenu.script";
@@ -556,6 +557,34 @@ int ReplaceAll(std::string* text, const std::string& from, const std::string& to
     return n;
 }
 
+// Options > Controls > Joystick > None: add a "None" item after the device
+// names (the device indices stay the same; None is the count). The remap
+// poller must not poll an out-of-range index for None; its two guards are
+// narrowed to the real devices.
+void InjectJoystickNone(char* data, size_t size) {
+    std::string text(data, size);
+    if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
+        return;
+    }
+    const char* anchor =
+        "callback($$Shell_CallbackHandler$$,GetJoyStickNames,nJoysticks,szJoyNames[])";
+    const std::string block =
+        "if(nJoysticks > 0 && nJoysticks < 10)\r\n"
+        "{\r\n"
+        "szJoyNames[nJoysticks] = \"None\"\r\n"
+        "nJoysticks = nJoysticks + 1\r\n"
+        "}\r\n";
+    if (!InsertAfterLine(&text, anchor, block)) {
+        Log("script: OM_Controls.script anchor not found; None option not added\n");
+        return;
+    }
+    ReplaceAll(&text, "if (parent.nJoysticks != 0)",
+              "if (parent.nJoysticks > 1 && parent.nJoySelected < parent.nJoysticks - 1)");
+    ReplaceAll(&text, "if(parent.nJoysticks != 0)",
+              "if(parent.nJoysticks > 1 && parent.nJoySelected < parent.nJoysticks - 1)");
+    WriteBack(data, size, text, "OM_Controls.script", "Joystick None option");
+}
+
 // Script lines that set mwt to `var` without spaces, '_' and '-'.
 #define MW_SQUEEZE(var)                                                          \
     "mwt = \"\"\r\n"                                                             \
@@ -755,13 +784,15 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         const char* name = reinterpret_cast<char*>(entry + kEntryName);
         const size_t len = entry[kEntryNameLen];
         const bool video = len == sizeof(kTargetName) - 1 && _stricmp(name, kTargetName) == 0;
+        const bool controls =
+            len == sizeof(kControlsTarget) - 1 && _stricmp(name, kControlsTarget) == 0;
         const bool game = len == sizeof(kGameTarget) - 1 && _stricmp(name, kGameTarget) == 0;
         const bool join = len == sizeof(kJoinTarget) - 1 && _stricmp(name, kJoinTarget) == 0;
         const bool menu = GetConfig().menu_badge && len == sizeof(kMainMenuTarget) - 1 &&
                           _stricmp(name, kMainMenuTarget) == 0;
         const bool list = GetConfig().mechlab_filter && EndsWithI(name, len, kListBoxSuffix);
         const bool chassis = GetConfig().mechlab_filter && EndsWithI(name, len, kChassisSuffix);
-        if (!video && !game && !join && !menu && !list && !chassis) {
+        if (!video && !controls && !game && !join && !menu && !list && !chassis) {
             return;
         }
         const DWORD stored = *reinterpret_cast<DWORD*>(entry + kEntryStored);
@@ -774,6 +805,8 @@ void __fastcall Hook_MemberFetch(unsigned char* entry, void* edx, void* archive)
         }
         if (video) {
             InjectWindowedCheckbox(data, size);
+        } else if (controls) {
+            InjectJoystickNone(data, size);
         } else if (game) {
             InjectGameSwitches(data, size);
         } else if (join) {
