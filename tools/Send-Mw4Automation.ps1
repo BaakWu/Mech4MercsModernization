@@ -25,7 +25,7 @@ if (-not $proc) { throw 'No MW4Mercs process with a hook log is running.' }
 $log = Join-Path $installPath "mw4hook-$($proc.Id).log"
 if (-not (Test-Path -LiteralPath $log)) { throw "Hook log not found: $log" }
 
-$before = (Get-Content -LiteralPath $log | Select-String -SimpleMatch 'auto: batch done').Count
+$before = @(Get-Content -LiteralPath $log | Select-String -SimpleMatch 'auto: batch done').Count
 $cmd = Join-Path $installPath 'mw4hook-cmd.txt'
 $tmp = "$cmd.tmp"
 Set-Content -LiteralPath $tmp -Value ($Command -join "`r`n") -Encoding ascii
@@ -34,7 +34,7 @@ Move-Item -LiteralPath $tmp -Destination $cmd -Force
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 200
-    $done = (Get-Content -LiteralPath $log | Select-String -SimpleMatch 'auto: batch done').Count
+    $done = @(Get-Content -LiteralPath $log | Select-String -SimpleMatch 'auto: batch done').Count
     if ($done -gt $before) { break }
 }
 if ((Get-Date) -ge $deadline) { throw 'Timed out waiting for the automation batch.' }

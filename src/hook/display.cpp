@@ -92,13 +92,13 @@ constexpr int kTextTypeSpecial2 = 5;  // TEXT_TYPE_SPECIAL2 (red), the game's "u
 // lacks (1440p, 4K). The list is the same on every monitor; sizes larger than
 // the screen are shown in red, and with Windowed off (borderless) they are
 // scaled to fill the screen.
-constexpr int kListCount = 28;
+constexpr int kListCount = 29;
 constexpr DWORD kResolutions[kListCount * 2] = {
     640,  480,  800,  600,  960,  600,  1024, 768,  1152, 768,  1152, 864,
     1280, 720,  1280, 768,  1280, 800,  1280, 854,  1280, 960,  1280, 1024,
     1360, 768,  1366, 768,  1400, 1050, 1440, 900,  1440, 960,  1600, 900,
-    1600, 1024, 1600, 1200, 1680, 1050, 1920, 1080, 1920, 1200, 2560, 1200,
-    2560, 1440, 2560, 1600, 3440, 1440, 3840, 2160,
+    1600, 1024, 1600, 1200, 1680, 1050, 1920, 1080, 1920, 1200, 2560, 1080,
+    2560, 1200, 2560, 1440, 2560, 1600, 3440, 1440, 3840, 2160,
 };
 
 using SetScreenMode_t = void(__stdcall*)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
@@ -476,7 +476,118 @@ int CallOriginal(DWORD a1, DWORD a2, int cmd, int option, int* value) {
     return g_shell_callback(a1, a2, args);
 }
 
+int __stdcall ShellCallbackBody(DWORD a1, DWORD a2, int* args);
+
+// Test aid ([debug] automation=1): the shell calls a regression test reads
+// back from the log (tools/Test-Mw4Regression.ps1) - pilot selection, the
+// Instant Action lance, 'Mech, map, difficulty and time, and the mission
+// result. Returns the number of arguments to show, or -1 for other calls.
+int TracedShellArgs(int cmd) {
+    switch (cmd) {
+    case 1:   // ShellInitIAScreen
+        return 0;
+    case 5:   // ShellSetMech: index, name, skin
+        return 3;
+    case 7:   // ShellSetTime
+    case 70:  // ShellGetTimeOfDay (Instant Action screen opens; set only on change)
+    case 73:  // ShellIAGetDifficulty (same)
+    case 54:  // ShellIASetMissionType
+    case 74:  // ShellIASetDifficulty
+        return 1;
+    case 49:  // ShellSetOptionValue: option, value
+        return 2;
+    case 18:  // ShellCreateNewPilot
+    case 19:  // ShellSelectPilot
+        return 1;
+    case 55:  // ShellIASetLancemate: slot, pilot index
+        return 2;
+    case 56:  // ShellIASetLancemateMech: slot, index, name
+        return 3;
+    case 71:  // ShellSetIAMissionName: name, index, id
+        return 3;
+    case 88:  // ShellIAGetResults: mission, pilot, deaths, kills, result, type, difficulty
+        return 7;
+    default:
+        return -1;
+    }
+}
+
+void TraceShellCall(int cmd, const int* args, int count, int result) {
+    char line[512];
+    int used = sprintf_s(line, "shell: %d ->%d", cmd, result);
+    for (int i = 1; i <= count && used > 0 && used < 400; ++i) {
+        if (IsBadReadPtr(args + i, sizeof(int))) {
+            break;
+        }
+        const int v = args[i];
+        const char* text = ScriptString(v);
+        if (text) {
+            used += sprintf_s(line + used, sizeof(line) - used, " '%.48s'", text);
+        } else if (v > 0x10000 && !IsBadReadPtr(reinterpret_cast<void*>(v), 4)) {
+            used += sprintf_s(line + used, sizeof(line) - used, " %d",
+                              *reinterpret_cast<const int*>(v));
+        } else {
+            used += sprintf_s(line + used, sizeof(line) - used, " #%d", v);
+        }
+    }
+    Log("%s\n", line);
+}
+
+// Test aid: the Instant Action 'Mech lists (ShellDataGetMechs 4 for the lance
+// commander, ShellIAGetMechsWithEmpty 114 for the lancemates). The droplists
+// show only the stock entries, in this order, so the test can find a
+// chassis' row by name. Logged once per list.
+void TraceMechList(int cmd, const int* args) {
+    static bool logged[2] = {};
+    bool& done = logged[cmd == 4 ? 0 : 1];
+    if (done || IsBadReadPtr(args + 1, 2 * sizeof(int))) {
+        return;
+    }
+    char* const* names = reinterpret_cast<char* const*>(args[1]);
+    const int* stock = reinterpret_cast<const int*>(args[2]);
+    if (!names || !stock) {
+        return;
+    }
+    done = true;
+    int row = 0;
+    __try {
+        for (int i = 0; i < 1024; ++i) {
+            if (IsBadReadPtr(names + i, sizeof(char*)) || IsBadReadPtr(stock + i, sizeof(int))) {
+                break;
+            }
+            const char* name = names[i];
+            if (!name || IsBadReadPtr(name, 1)) {
+                break;
+            }
+            if (stock[i] != 1) {
+                continue;
+            }
+            const char* text = ScriptString(reinterpret_cast<int>(name));
+            Log("shell: %d row %d '%.48s'\n", cmd, row++, text ? text : "");
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("shell: %d list read failed\n", cmd);
+    }
+    Log("shell: %d rows %d\n", cmd, row);
+}
+
 int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
+    const int cmd = args ? args[0] : -1;
+    int traced = GetConfig().debug_automation ? TracedShellArgs(cmd) : -1;
+    if (cmd == kShellSetOptionValue && (args[1] == 207 || args[1] == 208)) {
+        traced = -1;  // logged as mechlab: lines
+    }
+    const int result = ShellCallbackBody(a1, a2, args);
+    if (traced >= 0) {
+        TraceShellCall(cmd, args, traced, result);
+    }
+    if (GetConfig().debug_automation && (cmd == 4 || cmd == 114)) {
+        TraceMechList(cmd, args);
+    }
+    return result;
+}
+
+int __stdcall ShellCallbackBody(DWORD a1, DWORD a2, int* args) {
     const int cmd = args ? args[0] : -1;
     // Joystick list (issue #40 follow-up): the script adds a "None" item at
     // index = device count. Remember the count, show None when selected, and
@@ -531,6 +642,22 @@ int __stdcall Hook_ShellCallback(DWORD a1, DWORD a2, int* args) {
             Log("display: resolution list not as expected; the game's list is kept\n");
         }
         return result;
+    }
+    if (cmd == kShellSetOptionValue && args && (args[1] == 207 || args[1] == 208)) {
+        // Test aid: the MechLab class filter's visible rows (shellscript.cpp,
+        // only sent with [debug] automation=1). Not passed to the game.
+        auto int_arg = [](int v) {
+            return v > 0x10000 && !IsBadReadPtr(reinterpret_cast<void*>(v), 4)
+                       ? *reinterpret_cast<const int*>(v)
+                       : v;
+        };
+        if (args[1] == 208) {
+            Log("mechlab: filter %d, %d rows\n", int_arg(args[2]), int_arg(args[3]));
+        } else {
+            const char* name = ScriptString(args[2]);
+            Log("mechlab: row '%.48s' class %d\n", name ? name : "?", int_arg(args[3]));
+        }
+        return 1;
     }
     if ((cmd == kShellGetOptionValue || cmd == kShellSetOptionValue) && args[2]) {
         const int option = args[1];

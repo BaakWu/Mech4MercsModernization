@@ -13,7 +13,7 @@
 //   smove <x> <y>       800x600 shell coordinates, scaled to the client
 //   click               left button down for ~150 ms, then up
 //   mouse <dx> <dy> [ms] relative mouse motion (mickeys) spread over ms
-//   key   <vk>          press a virtual key (decimal or 0x hex)
+//   key   <vk> [ms] [n] press a virtual key (decimal or 0x hex) n times
 //   activate            post WM_ACTIVATEAPP/WM_ACTIVATE to the game window
 //   setwindowed <0|1>   call the Windowed backend directly (diagnostics)
 //   altenter            post Alt+Enter to the window procedure
@@ -40,6 +40,21 @@ POINT g_cursor = {0, 0};        // virtual cursor, client coordinates
 volatile LONG g_button_until = 0;
 volatile LONG g_key_until = 0;
 volatile LONG g_key_code = 0;
+// Game frames, counted by the DirectInput mouse poll (once per frame).
+volatile LONG g_polls = 0;
+
+// Waits until the game has run `frames` more frames (or `timeout_ms`). A
+// posted button-down and button-up that the game handles in the same frame
+// (it stalls briefly after many menu actions, e.g. loading a 'Mech's stats)
+// are not a click; holding the button across real frames makes clicks
+// reliable.
+void WaitFrames(LONG frames, DWORD timeout_ms) {
+    const LONG target = g_polls + frames;
+    const DWORD start = GetTickCount();
+    while (static_cast<LONG>(g_polls - target) < 0 && GetTickCount() - start < timeout_ms) {
+        Sleep(5);
+    }
+}
 
 // Relative mouse motion ("mouse dx dy ms"), spread evenly over the duration
 // and handed out through the DirectInput mouse state.
@@ -129,25 +144,47 @@ void Execute(const std::string& line) {
         EnterCriticalSection(&g_lock);
         LPARAM where = MAKELPARAM(g_cursor.x, g_cursor.y);
         LeaveCriticalSection(&g_lock);
-        InterlockedExchange(&g_button_until, static_cast<LONG>(GetTickCount() + hold));
+        // Held for `hold` ms and at least 3 game frames, so a frame sees it
+        // down even when the game stalls (see WaitFrames).
+        InterlockedExchange(&g_button_until, static_cast<LONG>(GetTickCount() + hold + 60000));
         if (hwnd) {
             PostMessageA(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, where);
         }
         Sleep(static_cast<DWORD>(hold));
+        WaitFrames(3, 3000);
+        InterlockedExchange(&g_button_until, 0);
         if (hwnd) {
             PostMessageA(hwnd, WM_LBUTTONUP, 0, where);
         }
+        WaitFrames(2, 2000);
         Sleep(150);
     } else if (_stricmp(verb, "key") == 0) {
         // Virtual-key code; posted as window messages and injected into the
         // DirectInput keyboard state (scan code) for code paths that poll it.
         // Optional second argument: hold time in ms (default 150); while held,
         // auto-repeat WM_KEYDOWN messages are posted like a real keyboard.
+        // Optional third argument: press the key that many times (each press
+        // held <hold> ms, 100 ms apart), e.g. "key 40 30 12" = Down 12 times.
         char* next = nullptr;
         const UINT vk = static_cast<UINT>(strtol(rest, &next, 0));
-        int hold = next ? atoi(next) : 0;
+        int hold = 0;
+        int count = 1;
+        if (next) {
+            sscanf_s(next, "%d %d", &hold, &count);
+        }
         if (hold <= 0) {
             hold = 150;
+        }
+        if (count > 1) {
+            const UINT repeat_scan = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+            HWND repeat_hwnd = MainWindow();
+            for (int i = 0; i < count && repeat_hwnd; ++i) {
+                PostMessageA(repeat_hwnd, WM_KEYDOWN, vk, 1 | (repeat_scan << 16));
+                Sleep(static_cast<DWORD>(hold));
+                PostMessageA(repeat_hwnd, WM_KEYUP, vk, 1 | (repeat_scan << 16) | 0xC0000000);
+                Sleep(100);
+            }
+            return;
         }
         const UINT scan = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
         HWND hwnd = MainWindow();
@@ -342,6 +379,7 @@ void AutomationFilterDeviceState(DWORD size, void* data, HRESULT* result) {
         return;
     }
     if (size == 16 || size == 20) {  // DIMOUSESTATE / DIMOUSESTATE2
+        InterlockedIncrement(&g_polls);
         if (FAILED(*result)) {
             memset(data, 0, size);
             *result = S_OK;

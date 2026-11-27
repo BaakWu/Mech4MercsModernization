@@ -169,7 +169,9 @@ presentation and original assets.
 13. **MechWarrior 5-style controls** — implemented (2026-11-16) as an opt-in
     option, `[controls] mw5=1` (`docs/HOOK.md`). Design agreed with the
     owner: W/S throttle (twice MW4's rate), S runs through zero into reverse,
-    reverse-only decay with an ease-out curve (forward throttle holds), A/D
+    Throttle Decay (a W/S throttle eases back to 0 in both directions after
+    release, ease-out curve; presets and X hold; owner confirmed 2026-11-25
+    that this, not reverse-only decay, is the intended behavior), A/D
     turn, and an MW5-style key layout applied by the Controls DEFAULT button
     (X full stop, P power, numpad presets, ...; Flush Coolant stays on F,
     Center Legs To Torso keeps Shift+Space). MW4 already had W/S/A/D with a
@@ -238,7 +240,8 @@ Windows first.
 
 3.1c's list has 29 sizes (up to 2560x1600, 3840x2400 and three spanning
 sizes). Updated 2026-11-21 (issue #38): the hook now lists 28 general sizes
-up to 3840x2160, including 1440p, 1600p and 3440x1440. Two in-memory fixes
+up to 3840x2160, including 1440p, 1600p and 3440x1440 (29 since 2026-11-25:
+2560x1080 added, issue #45). Two in-memory fixes
 make them playable: `d3dim700.dll` has two 2048 px render-target checks
 (the ddraw proxy patches both), and `HUDNumberText::GetIndex` has no 1440 or
 2160 text sets (detoured to the 1600/2400 sets). 2048x1536 still stops on
@@ -325,11 +328,13 @@ dinput.dll / ddraw.dll          native runtime hook
 | `docs/HOOK.md` | Development `dinput.dll` hook: windowed mode, Windowed checkbox, frontend scaling |
 | `docs/KNOWN-ISSUES.md` | Open problems from play testing (rendering, audio, fullscreen) |
 | `docs/PATCHER.md` | Development `mw4patch.exe`: verification, install, backups, uninstall |
+| `docs/REGRESSION.md` | Release regression test (`tools/Test-Mw4Regression.ps1`): scenarios, output, failures |
 | `manifests/` | Core and full hash manifests |
 | `templates/options.ini` | Known-good configuration template |
 | `src/hook/` | Native dinput proxy and window/resolution hooks |
 | `src/patcher/` | Installer: GUI release build and command-line `mw4patch.exe` |
 | `tools/New-Mw4Release.ps1` | Builds the release installer (`dist\MW4Mercs-ModernizationPatch-Setup-<version>.exe`) |
+| `tools/Test-Mw4Regression.ps1` | Release regression test: fresh extraction, installer, every feature in the real game, uninstall (issue #45) |
 | `tools/Get-Mw4InstallInfo.ps1` | Identify a build and validate options.ini |
 | `tools/Test-Mw4Manifest.ps1` | Verify files against a manifest |
 | `tools/Repair-Mw4Config.ps1` | Write a safe options.ini with backup |
@@ -436,9 +441,11 @@ High-value files:
    - AntiHack still loads
    - no new crash in the menu or in a mission
 8. Update docs and commit only source, docs, manifests, and small patch data.
-9. Build and verify the release installer, then **stop and ask the owner**
-   before tagging or publishing. Do not create the tag or GitHub release
-   without an explicit go-ahead (rule 12).
+9. Build the release installer and run the regression test on it
+   (`pwsh ./tools/Test-Mw4Regression.ps1`, `docs/REGRESSION.md`); it must
+   report 0 failed. Then **stop and ask the owner** before tagging or
+   publishing, with the summary (`artifacts\regression\<time>\summary.md`).
+   Do not create the tag or GitHub release without an explicit go-ahead (rule 12).
 10. Never leave the game or a test process running.
 11. Before handing off, record whether the test started from a fresh
     `MekTek.rar` extraction or from an already-patched install.

@@ -526,11 +526,12 @@ void AimAfterDrive(char* self, double now) {
             logged = now;
             Log("aim: t=%.3f d=%+.0f,%+.0f target=%+.4f,%+.4f torso=%+.4f,%+.4f cmd=%+.3f,%+.3f "
                 "in=%+.3f,%+.3f rate=%.2f,%.2f limit=%.4f,%.4f%s%s heading=%+.4f world=%+.4f "
-                "gyro=%d\n",
+                "gyro=%d cmd0=%d\n",
                 now, dx, dy, g.yaw.target, g.pitch.target, yaw, pitch, yaw_cmd, pitch_cmd,
                 input_yaw, input_pitch, g.yaw.rate, g.pitch.rate, twist_limit, pitch_limit,
                 limits.full_turn ? " full_turn" : "", limits.from_data ? "" : " (fallback)",
-                g.heading, WrapAngle(g.heading + yaw), gyro ? 1 : 0);
+                g.heading, WrapAngle(g.heading + yaw), gyro ? 1 : 0,
+                yaw_cmd == 0.0f ? 1 : 0);  // 0: the torso twist sound plays (issue #32)
         }
     }
 }
