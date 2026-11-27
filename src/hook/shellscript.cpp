@@ -191,14 +191,18 @@ std::string Compact(const std::string& text) {
 // Writes |text| back into the game's buffer at the same length: a marker
 // comment padded with spaces, then the compacted script. Leaves the buffer
 // untouched if it does not fit.
-void WriteBack(char* data, size_t size, const std::string& text, const char* name,
+bool FitsBack(size_t size, const std::string& text) {
+    return sizeof(kMarker) + 1 + 2 + Compact(text).size() <= size;
+}
+
+bool WriteBack(char* data, size_t size, const std::string& text, const char* name,
                const char* what) {
     const std::string body = Compact(text);
     std::string out = std::string("//") + kMarker;
     if (out.size() + 2 + body.size() > size) {
         Log("script: %s rewrite needs %zu bytes, have %zu; skipped\n", name,
             out.size() + 2 + body.size(), size);
-        return;
+        return false;
     }
     out.append(size - out.size() - 2 - body.size(), ' ');
     out += "\r\n";
@@ -206,6 +210,7 @@ void WriteBack(char* data, size_t size, const std::string& text, const char* nam
     memcpy(data, out.data(), size);
     Log("script: %s added to %s (%zu bytes, %zu spare)\n", what, name, size,
         size - 2 - body.size() - sizeof(kMarker) - 1);
+    return true;
 }
 
 void InjectWindowedCheckbox(char* data, size_t size) {
@@ -413,6 +418,11 @@ void DumpScript(const unsigned char* entry) {
             base = name + i + 1;
         }
     }
+    if (script) {
+        // Test aid: which screen scripts load, in order (the regression test
+        // waits for these as screen checkpoints).
+        Log("script: load %.*s\n", static_cast<int>(name + len - base), base);
+    }
     char file[MAX_PATH];
     sprintf_s(file, "%s\\%.*s", path, static_cast<int>(name + len - base), base);
     HANDLE h = CreateFileA(file, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
@@ -595,6 +605,16 @@ void InjectJoystickNone(char* data, size_t size) {
     "if (equal$(mwc, \"-\") != true)\r\n{\r\n"                                   \
     "mwt = mwt mwc\r\n}\r\n}\r\n}\r\n}\r\n"
 
+// Appended to the filter's GUI_INIT block (see InjectListFilter).
+#define MW_LIST_TRACE                                                             \
+    "if (mwdbg == 1)\r\n{\r\n"                                                    \
+    "callback($$Shell_CallbackHandler$$, 49, 208, filter_class, vis_count)\r\n"    \
+    "for (mwi = 0; mwi < vis_count; mwi++)\r\n{\r\n"                               \
+    "callback($$Shell_CallbackHandler$$, 49, 207, list_item[vis[mwi]], "           \
+    "row_class[vis[mwi]])\r\n}\r\n}\r\n"
+const char kListTraceMarker[] = "if (mwdbg == 1)";
+const std::string kListTrace = MW_LIST_TRACE;
+
 void InjectListFilter(char* data, size_t size) {
     std::string text(data, size);
     if (text.compare(0, sizeof(kMarker) + 1, std::string("//") + kMarker) == 0) {
@@ -626,7 +646,7 @@ void InjectListFilter(char* data, size_t size) {
                                "string mwn\r\nstring mws\r\nstring mwt\r\nstring mwc\r\n"
                                "int mwj\r\nint mwready = 0\r\nstring mwnames[128]\r\n"
                                "int count_classes = 0\r\nint mwrc\r\n"
-                               "int row_class[max_items]\r\nint class_present[5]\r\n"
+                               "int row_class[max_items]\r\nint class_present[5]\r\nint mwdbg = 1\r\n"
                                "for (mwi = 0; mwi < max_items; mwi++)\r\n{\r\nvis[mwi] = mwi\r\n}\r\n");
     ok = ok && InsertInsideBlock(&text, "GUI_INIT",
                                  "if (filter_class < 0 && count_classes == 0)\r\n{\r\n"
@@ -661,7 +681,7 @@ void InjectListFilter(char* data, size_t size) {
                                  // Unknown rows (e.g. a renamed 'Mech) stay in every class.
                                  "if (filter_class < 0 || mwrc < 0 || mwrc == filter_class)\r\n"
                                  "{\r\nvis[vis_count] = mwi\r\nvis_count++\r\n}\r\n"
-                                 "}\r\n}\r\n");
+                                 "}\r\n}\r\n" MW_LIST_TRACE);
     // Keep the scroll position inside the (possibly shorter) list.
     ok = ok && InsertAfterLine(&text, "o_thumbregionbot.location = location.x+itemWidth,",
                                "if (top_of_list > vis_count - num_displayed)\r\n{\r\n"
@@ -682,6 +702,15 @@ void InjectListFilter(char* data, size_t size) {
             "MechLab class filter not added\n",
             sizes, status, sel, items, pick);
         return;
+    }
+    // Test aid ([debug] automation=1): the list reports its visible rows to the
+    // hook (option 208: filter and count, 207: each row and its class), which
+    // logs them for tools/Test-Mw4Regression.ps1. Left out when automation is
+    // off, or when it would not fit the member's buffer.
+    const size_t trace = text.find(kListTraceMarker);
+    if (trace != std::string::npos &&
+        (!GetConfig().debug_automation || !FitsBack(size, text))) {
+        text.erase(trace, kListTrace.size());
     }
     WriteBack(data, size, text, "cm_listboxes.script", "MechLab class filter (list)");
 }

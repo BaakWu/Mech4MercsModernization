@@ -46,8 +46,10 @@ memory after the PECompact stub has unpacked the image.
   framed window the window is shrunk to fit the work area with the aspect
   kept; the game still renders at the chosen size and the picture is
   scaled.
-- **The list goes up to 4K** (issue #38): 28 sizes, from 640x480 to
-  3840x2160, including 2560x1200, 2560x1440, 2560x1600 and 3440x1440.
+- **The list goes up to 4K** (issue #38): 29 sizes, from 640x480 to
+  3840x2160, including 2560x1080 (added 2026-11-25 for the 21:9 monitors
+  and the regression test, issue #45), 2560x1200, 2560x1440, 2560x1600 and
+  3440x1440. 29 is also the number of rows the game's own list holds.
   2048x1536 remains out (it still stops on the loading screen; cause not
   found). Two runtime fixes make the larger sizes playable:
   - **Direct3D 7's artificial 2048 px limit.** `IDirect3D7::CreateDevice` in
@@ -83,7 +85,7 @@ memory after the PECompact stub has unpacked the image.
   2560x1440 (~150-160 fps), 2560x1600, 3440x1440 (~135 fps) and 3840x2160
   (~130 fps; the borderless window is clamped to the 2560x1440 monitor and
   the picture is scaled). The Video tab shows the selected size (including
-  3840 x 2160) and the list log reports 28 of 28 sizes. A 4K mission renders
+  3840 x 2160) and the list log reported 28 of 28 sizes (29 since 2560x1080). A 4K mission renders
   the HUD at the 2400 text set with 1024x1024 sharpened atlases.
 - **Never 16-bit:** 16-bit requests are raised to 32-bit, and the 16-bit
   fallbacks in GameOS' (now unused) fullscreen setup are raised to 32-bit.
@@ -1073,7 +1075,7 @@ Alt+Enter updates the box). Like the script's own `dRes`, a `dWin` variable
 records the setting when the tab opens, and the Reset button's handler sets it
 back next to `dRes`. The rewritten script uses all but 14 bytes of the buffer.
 
-The Resolution dropdown lists the hook's 28 general sizes (issue #38),
+The Resolution dropdown lists the hook's 29 general sizes (issue #38),
 not the game's 29-entry table or the retail game's five.
 The list opens where it was last scrolled, each arrow click scrolls two rows,
 and like every shell button an entry only takes a click after the pointer has
@@ -1193,6 +1195,22 @@ pwsh ./tools/Send-Mw4Automation.ps1 -Install $install -ShotDir out `
 ```
 
 `smove` takes coordinates in the scaled picture (800x600 in menus).
+`key <vk> <ms> <n>` presses a key n times (droplists take Up/Down/Enter, so
+a row can be picked exactly: Up to the top, Down n, Enter).
+
+With automation on the hook also logs what a test needs to check (all of
+it off without `[debug] automation=1`; used by `tools/Test-Mw4Regression.ps1`,
+`docs/REGRESSION.md`):
+
+| Log line | Meaning |
+|---|---|
+| `script: load <name>.script` | a shell screen script was loaded (screen checkpoints) |
+| `shell: <cmd> -><result> <args>` | selected shell calls: 1 Instant Action screen, 5 player 'Mech, 7 time, 18/19 pilot create/select, 49 set option, 54 action type, 55/56 lancemate skill/'Mech, 71 map, 74 difficulty, 88 mission result (mission, pilot, deaths, kills, result > 0 = success, type, difficulty) |
+| `shell: 4 row <n> '<name>'`, `shell: 114 row ...` | the Instant Action 'Mech droplists (player, lancemates), row by row |
+| `mechlab: filter <class>, <n> rows`, `mechlab: row '<name>' class <c>` | the MechLab chassis list's visible rows after a Class choice (the list script reports them through option 207/208, which the hook consumes) |
+| `controls: t=... throttle ... keys ..` | throttle changes |
+| `aim: t=... heading=... world=... gyro=.. cmd0=..` | aim point, torso, legs heading, world aim; `cmd0=1` means the yaw command is exactly 0 (no torso twist sound, issue #32) |
+| `gyro: ... drawn_world=...` | Gyro Aim: the torso's world direction in each drawn frame |
 `click <ms>` holds the button that long (default 150; list arrows auto-repeat
 while held, `click 40` scrolls one step). `movewin x y` moves the window.
 With automation on, every shell script the game loads is also saved to
