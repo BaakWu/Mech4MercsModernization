@@ -29,3 +29,9 @@
 /dist/*.exe
 /dist/*.zip
 /dist/*.pdb
+
+# Hook build output and local link leftovers.
+/src/hook/bin/
+/src/hook/*.obj
+/src/hook/*.exp
+/src/hook/*.lib
