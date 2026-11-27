@@ -80,6 +80,10 @@ void LoadConfig() {
         static_cast<int>(GetPrivateProfileIntW(L"debug", L"sound_lost", 0, path));
     g_config.debug_sound_lost_all =
         GetPrivateProfileIntW(L"debug", L"sound_lost_all", 0, path) != 0;
+    g_config.debug_sound_lost_play =
+        static_cast<int>(GetPrivateProfileIntW(L"debug", L"sound_lost_play", 0, path));
+    g_config.debug_abl_crash =
+        static_cast<int>(GetPrivateProfileIntW(L"debug", L"abl_crash", 0, path));
     g_config.input_controllers = GetPrivateProfileIntW(L"input", L"controllers", 1, path) != 0;
     g_config.input_other_devices =
         GetPrivateProfileIntW(L"input", L"other_devices", 0, path) != 0;

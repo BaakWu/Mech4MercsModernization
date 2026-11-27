@@ -90,6 +90,8 @@ struct Config {
     // [debug] sound_lost_all=1: its replacement fails too.
     int debug_sound_lost = 0;
     bool debug_sound_lost_all = false;
+    int debug_sound_lost_play = 0;  // [debug] sound_lost_play: buffers lost after S s, -1 with abl_crash (#44)
+    int debug_abl_crash = 0;        // [debug] abl_crash: test the ABL crash report (#44)
     bool input_controllers = true;    // [input] controllers: open game controllers (#34)
     bool input_other_devices = false;  // [input] other_devices: also non-controller HID devices (#34)
     bool input_gamepad_layout = true;  // [input] gamepad_layout: MW5-style gamepad axes (#42)
@@ -155,6 +157,8 @@ bool InstallSoundHooks();
 
 // GameOS error handler: null current heap fix and error text log (gameos.cpp, #47).
 bool InstallGameOsHooks();
+bool InstallAblCrashReport();
+void LoseSoundBuffersForTest();  // [debug] sound_lost_play=-1 with abl_crash
 
 // A new pilot's default camouflage (camo.cpp, issue #19).
 // Per-pilot records in mw4hook-pilots.ini (survive restarts): a new pilot's
