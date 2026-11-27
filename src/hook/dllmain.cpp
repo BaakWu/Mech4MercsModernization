@@ -96,6 +96,7 @@ DWORD WINAPI HookThread(LPVOID) {
     bool camo_done = !config.hooks_enabled;
     bool campaign_done = !config.hooks_enabled;
     bool gameos_done = !config.hooks_enabled;
+    bool abl_done = !config.hooks_enabled;
     // Before GameOS loads dsound.dll and creates its buffers.
     if (config.hooks_enabled) {
         mw4hook::InstallSoundHooks();
@@ -123,6 +124,9 @@ DWORD WINAPI HookThread(LPVOID) {
         }
         if (!gameos_done) {
             gameos_done = mw4hook::InstallGameOsHooks();
+        }
+        if (!abl_done) {
+            abl_done = mw4hook::InstallAblCrashReport();
         }
         mw4hook::InstallHooks();
         Sleep(10);

@@ -295,9 +295,8 @@ issue: with `recover=0` the game stops on the same STOP as the reports
 takes the buffers and the game runs; with the replacement failing too, the
 buffers are silent and the game runs. Whether a new object helps against
 the real failure (the issue's hypothesis) is not yet confirmed on the
-affected machine; the silent fallback covers it either way. Not covered:
-calls on buffers that were made before the device broke (`GetStatus`,
-`Play`, `Lock` returning `DSERR_BUFFERLOST`, issue #44).
+affected machine; the silent fallback covers it either way. Buffers that
+already exist when the device breaks are handled separately (next section).
 
 Test aid: `[debug] sound_lost=N` makes GameOS' own `IDirectSound` (the one
 opened by device GUID) return `DSERR_BUFFERLOST` for every secondary buffer
@@ -306,6 +305,82 @@ too. DirectShow's object is left alone (it retries a failed buffer forever
 and the movie stalls). With `Set-Mw4IntroSkip.ps1`, `sound_lost=2` hits the
 stereo STOP of the 22:48 report and `sound_lost=3` the mono buffer of the
 22:58 report (#47).
+
+### Lost buffers while playing (`[sound] recover=1`; issue #44)
+
+A buffer that already exists can lose its memory too (device change,
+endpoint briefly gone). It then returns `DSERR_BUFFERLOST` from every call
+until `Restore()` is called, which GameOS never does; it treats the failure as
+fatal. In the session of issue #44 GameOS was already showing a crash
+dialog, paused its sounds for it, met such a buffer in `GetStatus` and showed
+"Nested exception! - Cause: 'SoundPause' ... DSERR_BUFFERLOST - GetStatus"
+instead of the real error.
+
+The hook patches the `IDirectSoundBuffer` methods GameOS uses, in the vtable
+shared by all secondary buffers (patched on the first real buffer; the
+silent buffers of #46 have their own): slots 4 `GetCurrentPosition`, 9
+`GetStatus`, 11 `Lock`, 12 `Play`, 13 `SetCurrentPosition`, 15 `SetVolume`,
+16 `SetPan`, 17 `SetFrequency`, 18 `Stop`, 19 `Unlock`, 20 `Restore`. On
+`DSERR_BUFFERLOST` it calls `Restore()` and repeats the call once. A buffer
+that stays lost answers as an idle one: the call returns `DS_OK` and does
+nothing, `GetStatus` reports "stopped", `GetCurrentPosition` 0, and `Lock`
+hands out zeroed scratch memory that `Unlock` frees. The game goes on
+without that sound. Restored memory is silent until GameOS writes it again
+(streamed music does at once). Log: `sound: GetStatus on buffer <p>:
+DSERR_BUFFERLOST; restored` or `...; still lost, answered as an idle buffer`
+(first 5, then every 500th). `[sound] recover=0` passes the error to the game
+again.
+
+Verified with the test aids below, in the menus (12 s after start, during the
+startup sounds) and in an Instant Action mission:
+
+| Run | Result |
+|---|---|
+| `sound_lost_play=12`, `recover=0` | "Fatal Error": `FAILED (0x88780096 - DSERR_BUFFERLOST) - GetStatus(0x13d16df0)` (and `Lock`, `put_Volume`), as in the issue |
+| `sound_lost_play=12` | buffers restored, the game runs |
+| `sound_lost_play=12`, `sound_lost_all=1` | `Restore` fails too; idle answers, the game runs |
+| `abl_crash=58`, `sound_lost_play=-1`, `sound_lost_all=1`, `recover=0` | the #44 sequence: the script crash, then `GetStatus` `DSERR_BUFFERLOST` while GameOS pauses the sounds; "Fatal Error" |
+| the same with recovery on | GameOS' normal Error dialog with the real error (`Attempt to read from address 0x00000094`) only |
+
+Test aid: `[debug] sound_lost_play=S` makes every real buffer lost S seconds
+after start until it is restored (`sound_lost_all=1`: `Restore` fails too);
+`-1` loses them when the `abl_crash` test fires.
+
+### ABL script crash report (issue #44)
+
+The mission scripts run in ABL, the FASA script interpreter also used by
+MechCommander 2. The crash of issue #44 (2026-11-24, in a campaign mission)
+was an access violation at `0x00667FA4` in ABL's routine call (3.1c
+`0x00667D40`; retail PR1 `0x0064F060`, the same code). After the called
+routine returns, its exit (`0x00664010`) restores the caller's code pointer
+from the routine's stack frame, and the next token is read through it:
+
+```text
+00664060  8B 48 0C           mov ecx,[eax+0Ch]       ; eax = stack frame: return address
+00664063  89 0D A0 81 1E 01  mov [011E81A0],ecx      ; codeSegmentPtr
+...
+00667F98  A1 A0 81 1E 01     mov eax,[011E81A0]
+00667FA4  0F BE 10           movsx edx,byte ptr [eax] ; fault
+```
+
+So the frame held a bad return address: a damaged ABL stack, or code freed
+while it ran. The code is unchanged from retail, the hook does not run in
+that path, and it happened once, without a dump; the cause is not known. The
+hook now writes the script state when it happens again: a vectored exception
+handler sees a fault inside the routine call (`0x00667D40`-`0x00667FCA`,
+found by pattern) before GameOS does, logs
+
+```text
+abl: access violation at 00667FA4 (reading 00000094) returning from ABL routine 'sit'
+(library none) in module 'MW4Mission'; call depth 1, code pointer 00000094, stack frame 14530A38
+```
+
+and lets GameOS handle the exception as before (its dialog text is logged as
+`gameos: error #n (flags 0x2011): ...`). Nothing in the game changes.
+
+Test aid: `[debug] abl_crash=S` writes `0x94` over the current ABL frame's
+return address from S seconds after start, which reproduces the fault in a
+mission (the example above); the game then stops on GameOS' Error dialog.
 
 ### GameOS error reports (`[gameos] heap_fallback=1`; issue #47)
 
@@ -1209,6 +1284,8 @@ game's handler sees it.
 | drop zone next position | `0x004E61F0` | 6-byte detour (lancemates in an empty drop zone, full company) |
 | `gos_Malloc` current heap | `0x006FAA19` | 11 bytes: a null current heap falls through to the default heap (#47) |
 | GameOS error handler | `0x006FF600` | 9-byte detour (logs the error text, #47) |
+| ABL routine call | `0x00667D40` | none: a vectored exception handler logs faults inside it (#44) |
+| `IDirectSoundBuffer` | vtable slots 4, 9, 11, 12, 13, 15-20 | restore lost buffers, answer as idle (#44) |
 | `IDirectSound` | dsound.dll `DirectSoundCreate` (5-byte detour), vtable slots 2, 3, 5, 6 | background audio, lost-device recovery (#26, #46) |
 
 The last three are COM vtable hooks inside the `ddraw.dll` proxy; nothing in
@@ -1251,7 +1328,8 @@ names=1       ; roster 'Mech names redrawn from the MicroStyle font
 [sound]
 background=1  ; keep the audio playing when the window is not focused
 recover=1     ; (default, not in the shipped ini) survive a lost DirectSound device:
-              ; a new DirectSound on the same device, else silent buffers (#46)
+              ; a new DirectSound on the same device, else silent buffers (#46);
+              ; lost existing buffers are restored or answered as idle (#44)
 [gameos]
 heap_fallback=1 ; (default, not in the shipped ini) null current heap -> default heap,
                 ; so GameOS' error dialog shows the real error (#47)
@@ -1278,7 +1356,10 @@ Development only (not shipped):
 automation=1  ; in-process test driver + frame capture (see below)
 dump_image=1  ; write the unpacked image to mw4hook-image-<pid>.bin
 sound_lost=N  ; GameOS' DirectSound loses every buffer from the Nth on (#46)
-sound_lost_all=1 ; with sound_lost: its replacement too (silent buffers)
+sound_lost_all=1 ; with sound_lost: its replacement too (silent buffers);
+                 ; with sound_lost_play: Restore fails too
+sound_lost_play=S ; every existing buffer is lost S s after start (-1: with abl_crash) (#44)
+abl_crash=S   ; damage the ABL frame's return address after S s: the #44 crash
 ```
 
 ## Build and install

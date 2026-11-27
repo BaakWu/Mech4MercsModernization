@@ -40,6 +40,7 @@ $sources = @(
     'display.cpp',
     'dllmain.cpp',
     'gameos.cpp',
+    'abl.cpp',
     'input_probe.cpp',
     'iat.cpp',
     'imagehlp.cpp',

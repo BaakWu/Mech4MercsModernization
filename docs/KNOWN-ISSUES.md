@@ -121,6 +121,22 @@ which the hook now recovers from.
   2026-11-16, e.g. 1280x1024 after scrolling).
 - AntiHack and multiplayer join are untested with the detours.
 
+## 8. Crash at `0x00667FA4` in a mission — OPEN (cause unknown, report in place)
+
+Issue #44. Once, on 2026-11-24 in a campaign mission (probably New Exford -
+Storm Patrol): an access violation at `0x00667FA4`, then "Nested exception!
+- Cause: 'SoundPause' ... DSERR_BUFFERLOST - GetStatus". The fault is in the
+mission-script (ABL) interpreter: returning from a script routine, the code
+pointer restored from its stack frame was invalid. The code is unchanged from
+retail and the hook does not run in that path; the Windows report is gone and
+there was no dump, so the cause is not known.
+
+Since 1.9.3: the second dialog is gone (lost sound buffers are restored or
+answered as idle, so the real error dialog appears), and the hook writes the
+script module and routine to `mw4hook-<pid>.log` (`abl: access violation
+...`) if the crash happens again. That line is what is needed to find it.
+See `docs/HOOK.md`, "ABL script crash report".
+
 ## Test aids
 
 - `[debug] automation=1` + `tools/Send-Mw4Automation.ps1` drive the game and

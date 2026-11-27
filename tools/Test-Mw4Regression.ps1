@@ -583,6 +583,10 @@ function Get-IniValue([string]$Path, [string]$Section, [string]$Key) {
 # ---------------------------------------------------------------------------
 function Invoke-Installer([ValidateSet('install', 'uninstall')][string]$Action, [string]$Tag) {
     $logFile = Join-Path $OutDir "installer-$Tag.log"
+    # The summary reports the hash taken at the start; a rebuild during the
+    # run would make it name a file that was not the one tested.
+    $now = (Get-FileHash -LiteralPath $installerFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert ($now -eq $installerHash) "the installer changed during the run ($installerHash -> $now)"
     if ($Cli) {
         $exe = Join-Path $repo 'dist\mw4patch.exe'
         $cliArgs = if ($Action -eq 'install') { @('install', $install, '--yes', '--mw5', '--full-company') } else { @('uninstall', $install, '--yes') }
@@ -1570,7 +1574,7 @@ try {
                 $sig = $hookLog + $ddrawLog | Where-Object { $_ -match '0x00667FA4|00667FA4|DSERR_BUFFERLOST|SoundPause|access violation|exception' -and $_ -notmatch '^(auto|sound):' }
                 Assert (-not $sig) "crash signature in the log: $($sig | Select-Object -First 1)"
                 Assert ($script:gamePid -and (Get-Process -Id $script:gamePid -ErrorAction SilentlyContinue)) 'the game was not running at the end of the session'
-                $recovered = @($hookLog | Where-Object { $_ -match '^sound: .*(still DSERR_BUFFERLOST|silent buffer)' }).Count
+                $recovered = @($hookLog | Where-Object { $_ -match '^sound: .*(still DSERR_BUFFERLOST|silent buffer|DSERR_BUFFERLOST; (restored|still lost))' }).Count
                 if ($recovered) { "no dialog, no unexpected exit, no crash signature (#44); sound recovered from $recovered lost-buffer event(s) (#46)" }
                 else { 'no dialog, no unexpected exit, no crash signature (#44)' }
             } | Out-Null

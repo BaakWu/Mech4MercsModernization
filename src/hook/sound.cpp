@@ -28,10 +28,14 @@
 //      keeps its data in memory and advances its play position in real time,
 //      but plays nothing. The game starts without that one sound instead of
 //      stopping.
+// Lost buffers that already exist (issue #44): see "Lost buffers" below.
+//
 // Only DSERR_BUFFERLOST is handled; other errors reach the game unchanged.
-// [sound] recover=0 turns it off. Test aid: [debug] sound_lost=N makes the
+// [sound] recover=0 turns it off. Test aids: [debug] sound_lost=N makes the
 // game's object fail from the Nth secondary buffer on (sound_lost_all=1:
-// the replacement object too).
+// the replacement object too); sound_lost_play=S loses every existing buffer
+// S seconds after start until it is restored (sound_lost_all=1: Restore
+// fails too).
 #include "hook.h"
 
 #include <mmreg.h>
@@ -672,6 +676,312 @@ void MarkSilent(IDirectSound* self) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Lost buffers that already exist (issue #44)
+//
+// GameOS checks every call on its buffers and treats a failure as fatal. A
+// buffer whose memory Windows took away (device change, endpoint briefly
+// gone) returns DSERR_BUFFERLOST from GetStatus, Play, Lock, ... until
+// Restore() is called, which GameOS never does. In a session of 2026-11-24
+// GameOS was showing a crash dialog, paused its sounds, hit such a buffer in
+// GetStatus and reported a nested exception instead. The hook calls Restore
+// and retries once; a buffer that stays lost answers as an idle one (the call
+// does nothing: GetStatus says "not playing", Lock hands out scratch memory)
+// so the game goes on without that sound. Restored memory is silent until
+// GameOS writes it again.
+
+enum BufferSlot {
+    kGetCurrentPosition = 4,
+    kGetStatus = 9,
+    kLock = 11,
+    kPlay = 12,
+    kSetCurrentPosition = 13,
+    kSetVolume = 15,
+    kSetPan = 16,
+    kSetFrequency = 17,
+    kStop = 18,
+    kUnlock = 19,
+    kRestore = 20,
+    kBufferSlots = 21,
+};
+void* g_buffer_methods[kBufferSlots] = {};  // the originals
+ULONGLONG g_start_tick = 0;
+volatile LONG g_lost_calls = 0;
+
+using GetCurrentPosition_t = HRESULT(WINAPI*)(IDirectSoundBuffer*, LPDWORD, LPDWORD);
+using GetStatus_t = HRESULT(WINAPI*)(IDirectSoundBuffer*, LPDWORD);
+using Lock_t = HRESULT(WINAPI*)(IDirectSoundBuffer*, DWORD, DWORD, LPVOID*, LPDWORD, LPVOID*,
+                                LPDWORD, DWORD);
+using Play_t = HRESULT(WINAPI*)(IDirectSoundBuffer*, DWORD, DWORD, DWORD);
+using SetDword_t = HRESULT(WINAPI*)(IDirectSoundBuffer*, DWORD);
+using SetLong_t = HRESULT(WINAPI*)(IDirectSoundBuffer*, LONG);
+using Stop_t = HRESULT(WINAPI*)(IDirectSoundBuffer*);
+using Unlock_t = HRESULT(WINAPI*)(IDirectSoundBuffer*, LPVOID, DWORD, LPVOID, DWORD);
+
+template <typename T>
+T Original(BufferSlot slot) {
+    return reinterpret_cast<T>(g_buffer_methods[slot]);
+}
+
+// Test aid ([debug] sound_lost_play=S): S seconds after start, every real
+// buffer is lost until it is restored (sound_lost_all=1: Restore fails too).
+constexpr int kRestored = 1024;
+IDirectSoundBuffer* g_restored[kRestored];  // under g_lock
+int g_restored_count = 0;
+
+volatile LONG g_lose_now = 0;  // sound_lost_play=-1: set by the ABL crash test
+
+bool SimulatedLostBuffer(IDirectSoundBuffer* b) {
+    const int seconds = GetConfig().debug_sound_lost_play;
+    if (seconds == 0 || (seconds < 0 && !g_lose_now) ||
+        (seconds > 0 &&
+         GetTickCount64() - g_start_tick < static_cast<ULONGLONG>(seconds) * 1000)) {
+        return false;
+    }
+    bool restored = false;
+    EnterCriticalSection(&g_lock);
+    for (int i = 0; i < g_restored_count && !restored; ++i) {
+        restored = g_restored[i] == b;
+    }
+    LeaveCriticalSection(&g_lock);
+    static volatile LONG first = 0;
+    if (!restored && InterlockedExchange(&first, 1) == 0) {
+        Log("sound: TEST: buffers are lost from now on (buffer %p)\n", static_cast<void*>(b));
+    }
+    return !restored;
+}
+
+HRESULT CallRestore(IDirectSoundBuffer* b) {
+    if (SimulatedLostBuffer(b)) {
+        if (GetConfig().debug_sound_lost_all) {
+            return DSERR_BUFFERLOST;
+        }
+        EnterCriticalSection(&g_lock);
+        if (g_restored_count < kRestored) {
+            g_restored[g_restored_count++] = b;
+        }
+        LeaveCriticalSection(&g_lock);
+    }
+    return Original<Stop_t>(kRestore)(b);  // Restore has Stop's signature
+}
+
+void NoteLost(const char* method, IDirectSoundBuffer* b, bool restored) {
+    const LONG n = InterlockedIncrement(&g_lost_calls);
+    if (n <= 5 || n % 500 == 0) {
+        Log("sound: %s on buffer %p: DSERR_BUFFERLOST; %s (%ld so far)\n", method,
+            static_cast<void*>(b),
+            restored ? "restored" : "still lost, answered as an idle buffer", n);
+    }
+}
+
+// Runs |call|; on a lost buffer restores it and runs |call| once more.
+// Returns DSERR_BUFFERLOST only if the buffer is still lost (and the caller
+// then answers as an idle buffer), or unchanged with [sound] recover=0.
+template <typename Call>
+HRESULT Guarded(IDirectSoundBuffer* b, const char* method, Call call) {
+    HRESULT result = SimulatedLostBuffer(b) ? DSERR_BUFFERLOST : call();
+    if (result != DSERR_BUFFERLOST || !GetConfig().sound_recover) {
+        return result;
+    }
+    if (SUCCEEDED(CallRestore(b))) {
+        result = SimulatedLostBuffer(b) ? DSERR_BUFFERLOST : call();
+    }
+    NoteLost(method, b, result != DSERR_BUFFERLOST);
+    return result;
+}
+
+bool StillLost(HRESULT result) {
+    return result == DSERR_BUFFERLOST && GetConfig().sound_recover;
+}
+
+HRESULT WINAPI Buffer_GetCurrentPosition(IDirectSoundBuffer* b, LPDWORD play, LPDWORD write) {
+    const HRESULT result = Guarded(b, "GetCurrentPosition", [&] {
+        return Original<GetCurrentPosition_t>(kGetCurrentPosition)(b, play, write);
+    });
+    if (!StillLost(result)) {
+        return result;
+    }
+    if (play) {
+        *play = 0;
+    }
+    if (write) {
+        *write = 0;
+    }
+    return DS_OK;
+}
+
+HRESULT WINAPI Buffer_GetStatus(IDirectSoundBuffer* b, LPDWORD status) {
+    const HRESULT result =
+        Guarded(b, "GetStatus", [&] { return Original<GetStatus_t>(kGetStatus)(b, status); });
+    if (!StillLost(result)) {
+        return result;
+    }
+    if (status) {
+        *status = 0;  // stopped
+    }
+    return DS_OK;
+}
+
+// Scratch memory handed out by Lock on a buffer that stays lost.
+constexpr int kScratch = 64;
+void* g_scratch[kScratch];  // under g_lock
+
+HRESULT WINAPI Buffer_Lock(IDirectSoundBuffer* b, DWORD offset, DWORD bytes, LPVOID* p1,
+                           LPDWORD n1, LPVOID* p2, LPDWORD n2, DWORD flags) {
+    const HRESULT result = Guarded(b, "Lock", [&] {
+        return Original<Lock_t>(kLock)(b, offset, bytes, p1, n1, p2, n2, flags);
+    });
+    if (!StillLost(result) || !p1 || !n1) {
+        return result;
+    }
+    if (flags & DSBLOCK_ENTIREBUFFER) {
+        DSBCAPS caps{};
+        caps.dwSize = sizeof(caps);
+        bytes = SUCCEEDED(b->GetCaps(&caps)) ? caps.dwBufferBytes : 0x10000;
+    }
+    if (bytes == 0 || bytes > (64u << 20)) {
+        return result;
+    }
+    void* memory = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+    bool kept = false;
+    EnterCriticalSection(&g_lock);
+    for (void*& slot : g_scratch) {
+        if (!slot && memory) {
+            slot = memory;
+            kept = true;
+            break;
+        }
+    }
+    LeaveCriticalSection(&g_lock);
+    if (!kept) {
+        if (memory) {
+            HeapFree(GetProcessHeap(), 0, memory);
+        }
+        return result;
+    }
+    *p1 = memory;
+    *n1 = bytes;
+    if (p2) {
+        *p2 = nullptr;
+    }
+    if (n2) {
+        *n2 = 0;
+    }
+    return DS_OK;
+}
+
+HRESULT WINAPI Buffer_Unlock(IDirectSoundBuffer* b, LPVOID p1, DWORD n1, LPVOID p2, DWORD n2) {
+    bool scratch = false;
+    EnterCriticalSection(&g_lock);
+    for (void*& slot : g_scratch) {
+        if (p1 && slot == p1) {
+            slot = nullptr;
+            scratch = true;
+            break;
+        }
+    }
+    LeaveCriticalSection(&g_lock);
+    if (scratch) {
+        HeapFree(GetProcessHeap(), 0, p1);
+        return DS_OK;
+    }
+    const HRESULT result =
+        Guarded(b, "Unlock", [&] { return Original<Unlock_t>(kUnlock)(b, p1, n1, p2, n2); });
+    return StillLost(result) ? DS_OK : result;
+}
+
+HRESULT WINAPI Buffer_Play(IDirectSoundBuffer* b, DWORD reserved, DWORD priority, DWORD flags) {
+    const HRESULT result = Guarded(
+        b, "Play", [&] { return Original<Play_t>(kPlay)(b, reserved, priority, flags); });
+    return StillLost(result) ? DS_OK : result;
+}
+
+HRESULT WINAPI Buffer_SetCurrentPosition(IDirectSoundBuffer* b, DWORD position) {
+    const HRESULT result = Guarded(b, "SetCurrentPosition", [&] {
+        return Original<SetDword_t>(kSetCurrentPosition)(b, position);
+    });
+    return StillLost(result) ? DS_OK : result;
+}
+
+HRESULT WINAPI Buffer_SetVolume(IDirectSoundBuffer* b, LONG volume) {
+    const HRESULT result =
+        Guarded(b, "SetVolume", [&] { return Original<SetLong_t>(kSetVolume)(b, volume); });
+    return StillLost(result) ? DS_OK : result;
+}
+
+HRESULT WINAPI Buffer_SetPan(IDirectSoundBuffer* b, LONG pan) {
+    const HRESULT result =
+        Guarded(b, "SetPan", [&] { return Original<SetLong_t>(kSetPan)(b, pan); });
+    return StillLost(result) ? DS_OK : result;
+}
+
+HRESULT WINAPI Buffer_SetFrequency(IDirectSoundBuffer* b, DWORD frequency) {
+    const HRESULT result = Guarded(
+        b, "SetFrequency", [&] { return Original<SetDword_t>(kSetFrequency)(b, frequency); });
+    return StillLost(result) ? DS_OK : result;
+}
+
+HRESULT WINAPI Buffer_Stop(IDirectSoundBuffer* b) {
+    const HRESULT result = Guarded(b, "Stop", [&] { return Original<Stop_t>(kStop)(b); });
+    return StillLost(result) ? DS_OK : result;
+}
+
+HRESULT WINAPI Buffer_Restore(IDirectSoundBuffer* b) {
+    return CallRestore(b);
+}
+
+bool PatchSlot(void** vtable, int slot, void* hook, void** original);
+
+// The buffer methods are wrapped for recovery, or for the test aid alone
+// (with recover=0 the simulated loss reaches the game, as in the reports).
+bool RecoverBuffers() {
+    return GetConfig().sound_recover || GetConfig().debug_sound_lost_play != 0;
+}
+
+// Patches the methods above into the vtable of |b| (shared by every buffer of
+// its class), once per vtable.
+void PatchBuffer(IDirectSoundBuffer* b) {
+    if (!b || SilentBuffer::Is(b)) {
+        return;
+    }
+    void** vtable = *reinterpret_cast<void***>(b);
+    if (vtable[kGetStatus] == reinterpret_cast<void*>(&Buffer_GetStatus)) {
+        return;
+    }
+    struct Entry {
+        BufferSlot slot;
+        void* hook;
+    };
+    const Entry entries[] = {
+        {kGetCurrentPosition, reinterpret_cast<void*>(&Buffer_GetCurrentPosition)},
+        {kGetStatus, reinterpret_cast<void*>(&Buffer_GetStatus)},
+        {kLock, reinterpret_cast<void*>(&Buffer_Lock)},
+        {kPlay, reinterpret_cast<void*>(&Buffer_Play)},
+        {kSetCurrentPosition, reinterpret_cast<void*>(&Buffer_SetCurrentPosition)},
+        {kSetVolume, reinterpret_cast<void*>(&Buffer_SetVolume)},
+        {kSetPan, reinterpret_cast<void*>(&Buffer_SetPan)},
+        {kSetFrequency, reinterpret_cast<void*>(&Buffer_SetFrequency)},
+        {kStop, reinterpret_cast<void*>(&Buffer_Stop)},
+        {kUnlock, reinterpret_cast<void*>(&Buffer_Unlock)},
+        {kRestore, reinterpret_cast<void*>(&Buffer_Restore)},
+    };
+    // A second buffer class (another vtable) would need its own originals.
+    if (g_buffer_methods[kGetStatus] && g_buffer_methods[kGetStatus] != vtable[kGetStatus]) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            Log("sound: buffer %p has another vtable; lost-buffer recovery not applied to it\n",
+                static_cast<void*>(b));
+        }
+        return;
+    }
+    bool ok = true;
+    for (const Entry& e : entries) {
+        ok = PatchSlot(vtable, e.slot, e.hook, &g_buffer_methods[e.slot]) && ok;
+    }
+    Log("sound: lost-buffer recovery on the buffer methods %s\n", ok ? "ok" : "FAILED");
+}
+
 HRESULT WINAPI Hook_CreateSoundBuffer(IDirectSound* self, LPCDSBUFFERDESC desc,
                                       LPDIRECTSOUNDBUFFER* buffer, LPUNKNOWN outer) {
     if (!desc || !buffer || desc->dwSize < sizeof(DSBUFFERDESC1)) {
@@ -730,6 +1040,9 @@ HRESULT WINAPI Hook_CreateSoundBuffer(IDirectSound* self, LPCDSBUFFERDESC desc,
     if (SUCCEEDED(result) && use == &copy && InterlockedIncrement(&g_buffers) == 1) {
         Log("sound: buffers keep playing in the background (DSBCAPS_GLOBALFOCUS)\n");
     }
+    if (SUCCEEDED(result) && !primary && RecoverBuffers()) {
+        PatchBuffer(*buffer);
+    }
     return result;
 }
 
@@ -776,6 +1089,9 @@ HRESULT WINAPI Hook_DuplicateSoundBuffer(IDirectSound* self, LPDIRECTSOUNDBUFFER
     }
     if (result == DSERR_BUFFERLOST && GetConfig().sound_recover) {
         return MakeSilentCopy(source, out);
+    }
+    if (SUCCEEDED(result) && RecoverBuffers()) {
+        PatchBuffer(*out);
     }
     return result;
 }
@@ -891,6 +1207,7 @@ bool InstallSoundHooks() {
     }
     g_installed = true;
     InitializeCriticalSection(&g_lock);
+    g_start_tick = GetTickCount64();
     const Config& config = GetConfig();
     if (!config.sound_background && !config.sound_recover) {
         return true;
@@ -913,11 +1230,16 @@ bool InstallSoundHooks() {
     }
     InstallDetour(target, 5, reinterpret_cast<void*>(&Hook_DirectSoundCreate),
                   reinterpret_cast<void**>(&g_create));
-    Log("sound: DirectSoundCreate hook %s (background %d, recover %d%s)\n",
+    Log("sound: DirectSoundCreate hook %s (background %d, recover %d%s%s)\n",
         g_create ? "ok" : "FAILED", config.sound_background ? 1 : 0,
         config.sound_recover ? 1 : 0,
-        config.debug_sound_lost > 0 ? ", TEST: simulated lost buffers" : "");
+        config.debug_sound_lost > 0 ? ", TEST: simulated lost buffers" : "",
+        config.debug_sound_lost_play != 0 ? ", TEST: buffers lost while playing" : "");
     return true;
+}
+
+void LoseSoundBuffersForTest() {
+    InterlockedExchange(&g_lose_now, 1);
 }
 
 }  // namespace mw4hook
