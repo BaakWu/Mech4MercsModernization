@@ -91,12 +91,22 @@ monitor: the main menu (frozen before the fix) and live mission gameplay
 update. Not yet tested: a monitor with a different display scaling (DISPLAY1
 on the test machine runs at 125%).
 
-## 6. Crash at `0x006FABAA` during a manual session — OPEN
+## 6. Crash at `0x006FABAA` ("Nested exception ... GetProcessorDetails") — FIXED
 
-Windows Error Reporting logged an access violation at `MW4Mercs.exe+0x2FABAA`
-(`0x006FABAA`, the game's heap allocator reading through a null heap pointer)
-in a session on 2026-11-15 21:55, shortly after GameOS fell back from a failed
-fullscreen switch. Unknown trigger; not seen since.
+Windows Error Reporting logged access violations at `MW4Mercs.exe+0x2FABAA`
+8 times this month (2026-11-15 fullscreen-switch work, 11-17, 11-21, 11-24).
+It is never the first error (issue #47): GameOS hit some error, and its error
+handler then crashed while collecting machine details. Its
+`GetProcessorDetails` step calls `operator new` = `gos_Malloc(size, -1)`
+("current heap"), and outside a `gos_PushCurrentHeap` scope the current heap
+is null; `gos_Malloc` does not check it and reads `[0+94h]` at `0x006FABAA`.
+The player saw "Nested exception! - Cause: 'GetProcessorDetails'" instead of
+the real error. The hook now sends a null current heap to the default heap
+(`[gameos] heap_fallback`), so the real error dialog appears, and writes every
+GameOS error text to `mw4hook-<pid>.log` (`gameos: error ...`).
+Reproduced and verified with `[debug] sound_lost=3` (`docs/HOOK.md`, "GameOS
+error reports"). The 2026-11-24 occurrence was the sound failure of issue #46,
+which the hook now recovers from.
 
 ## 7. Smaller items
 

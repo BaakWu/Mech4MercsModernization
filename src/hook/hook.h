@@ -83,6 +83,13 @@ struct Config {
     bool menu_badge = true;         // [frontend] badge: Main Menu patch badge (#24)
     bool hud_names = true;          // [hud] names: roster names from the MicroStyle font
     bool sound_background = true;  // [sound] background: keep playing when unfocused (#26)
+    bool sound_recover = true;  // [sound] recover: survive a lost DirectSound device (#46)
+    bool gameos_heap_fallback = true;  // [gameos] heap_fallback: null current heap (#47)
+    // [debug] sound_lost=N: from the Nth secondary buffer request on, GameOS'
+    // IDirectSound reports DSERR_BUFFERLOST (#46 test aid; 0 = off).
+    // [debug] sound_lost_all=1: its replacement fails too.
+    int debug_sound_lost = 0;
+    bool debug_sound_lost_all = false;
     bool input_controllers = true;    // [input] controllers: open game controllers (#34)
     bool input_other_devices = false;  // [input] other_devices: also non-controller HID devices (#34)
     bool input_gamepad_layout = true;  // [input] gamepad_layout: MW5-style gamepad axes (#42)
@@ -145,6 +152,9 @@ void SharpenHudImage(unsigned char* entry, void* archive);
 
 // Audio keeps playing while the window is unfocused (sound.cpp, issue #26).
 bool InstallSoundHooks();
+
+// GameOS error handler: null current heap fix and error text log (gameos.cpp, #47).
+bool InstallGameOsHooks();
 
 // A new pilot's default camouflage (camo.cpp, issue #19).
 // Per-pilot records in mw4hook-pilots.ini (survive restarts): a new pilot's
