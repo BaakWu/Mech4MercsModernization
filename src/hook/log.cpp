@@ -73,6 +73,13 @@ void LoadConfig() {
     g_config.menu_badge = GetPrivateProfileIntW(L"frontend", L"badge", 1, path) != 0;
     g_config.hud_names = GetPrivateProfileIntW(L"hud", L"names", 1, path) != 0;
     g_config.sound_background = GetPrivateProfileIntW(L"sound", L"background", 1, path) != 0;
+    g_config.sound_recover = GetPrivateProfileIntW(L"sound", L"recover", 1, path) != 0;
+    g_config.gameos_heap_fallback =
+        GetPrivateProfileIntW(L"gameos", L"heap_fallback", 1, path) != 0;
+    g_config.debug_sound_lost =
+        static_cast<int>(GetPrivateProfileIntW(L"debug", L"sound_lost", 0, path));
+    g_config.debug_sound_lost_all =
+        GetPrivateProfileIntW(L"debug", L"sound_lost_all", 0, path) != 0;
     g_config.input_controllers = GetPrivateProfileIntW(L"input", L"controllers", 1, path) != 0;
     g_config.input_other_devices =
         GetPrivateProfileIntW(L"input", L"other_devices", 0, path) != 0;

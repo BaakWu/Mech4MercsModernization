@@ -246,17 +246,121 @@ GameOS loads `dsound.dll` itself (`LoadLibrary` + `GetProcAddress
 Input still pauses while the window is inactive (GameOS skips its input
 update then). `[sound] background=0` restores the stock behaviour.
 
-**Lost buffer at startup (2026-11-17).** One launch stopped on GameOS'
-error dialog: `CreateSoundBuffer` (`DSBCAPS_CTRLVOLUME | DSBCAPS_LOCSOFTWARE`,
-16-bit stereo 22050 Hz) failed with `DSERR_BUFFERLOST` (`0x88780096`) about
-5 s in. The default device was a USB headset's chat endpoint. Earlier buffers
-had been created fine. The hook's fallback to the game's unmodified request
-failed the same way, so the flag was not the cause; the endpoint was briefly
-unavailable. Two later launches did not reproduce it. The hook now retries a
-`DSERR_BUFFERLOST` failure every 10 ms, up to 25 times, before the game sees
-it, and logs `sound: CreateSoundBuffer lost the buffer; N retries`. Not yet
-verified against a real recurrence. Applies only while `[sound] background`
-is on, since that installs the hook.
+### Lost DirectSound device at startup (`[sound] recover=1`; issue #46)
+
+On some launches (4 of about 25 on the owner's machine, USB headset chat
+endpoint as the default device) every `CreateSoundBuffer` on GameOS'
+`IDirectSound` returns `DSERR_BUFFERLOST` (`0x88780096`) from a point early
+in startup on, right after `gos_SetScreenMode 800x600`, whatever the sound
+(16-bit stereo `CTRLVOLUME | LOCSOFTWARE`, or mono `CTRLFREQUENCY | CTRLPAN |
+CTRLVOLUME | LOCSOFTWARE`). The 1.9.1 retry (25 tries 10 ms apart, with and
+without `GLOBALFOCUS`) never helped: the object itself stays broken. GameOS
+treats any failed DirectX call as fatal and shows its STOP dialog (or, on
+the mono-buffer path, the "Nested exception" box of issue #47).
+
+What the hook does now, on the same `dsound.dll` detour (installed when
+`[sound] background` or `[sound] recover` is on):
+
+1. It keeps a table of every `IDirectSound` the game makes, with its device
+   GUID, window and cooperative level (`DirectSoundCreate`, vtable slots 2
+   `Release` and 6 `SetCooperativeLevel`). GameOS makes one per device while
+   it enumerates them, then keeps one on the chosen device's GUID and calls
+   `SetCooperativeLevel(main window, PRIORITY)`. The intro movies' DirectShow
+   renderer makes its own on the default device. All are logged
+   (`sound: DirectSoundCreate(<guid>) -> <hr> <object>`).
+2. A `DSERR_BUFFERLOST` from `CreateSoundBuffer` (slot 3) is still retried
+   for 250 ms. If it is still lost, the hook creates **a new `IDirectSound`
+   on the same device** (same GUID, same window and level) and creates the
+   buffer there. From then on that object's `CreateSoundBuffer` and
+   `DuplicateSoundBuffer` (slot 5) calls go to the new one; a duplicate of a
+   buffer made before the switch still goes to the original. Buffers of two
+   DirectSound objects mix in Windows' audio engine like two programs.
+   Releasing the game's object releases the replacement.
+3. If the replacement cannot be made, or loses its buffers too, the game
+   gets a **silent buffer**: a complete `IDirectSoundBuffer` (with
+   `IDirectSound3DBuffer` for 3D sounds, which GameOS queries) that accepts
+   every call, keeps the sample data in memory and advances its play
+   position in real time, but plays nothing. That device then gets one
+   attempt per buffer, no retries, so loading is not slowed. The game starts
+   without those sounds instead of stopping.
+
+Only `DSERR_BUFFERLOST` is handled; other failures reach the game
+unchanged. Primary buffers are not replaced. `[sound] recover=0` restores
+the 1.9.1 behaviour (retry, then the game's own error).
+
+Verified with the test aid (below) from the in-game failure points of the
+issue: with `recover=0` the game stops on the same STOP as the reports
+(`CreateSoundBuffer(...: DSBCAPS_CTRLVOLUME | DSBCAPS_LOCSOFTWARE , (PCM
+16-bit, 2 Channel, 22050Hz, 88200bps))`); with recovery on, the replacement
+takes the buffers and the game runs; with the replacement failing too, the
+buffers are silent and the game runs. Whether a new object helps against
+the real failure (the issue's hypothesis) is not yet confirmed on the
+affected machine; the silent fallback covers it either way. Not covered:
+calls on buffers that were made before the device broke (`GetStatus`,
+`Play`, `Lock` returning `DSERR_BUFFERLOST`, issue #44).
+
+Test aid: `[debug] sound_lost=N` makes GameOS' own `IDirectSound` (the one
+opened by device GUID) return `DSERR_BUFFERLOST` for every secondary buffer
+from the Nth buffer request on; `sound_lost_all=1` makes its replacement fail
+too. DirectShow's object is left alone (it retries a failed buffer forever
+and the movie stalls). With `Set-Mw4IntroSkip.ps1`, `sound_lost=2` hits the
+stereo STOP of the 22:48 report and `sound_lost=3` the mono buffer of the
+22:58 report (#47).
+
+### GameOS error reports (`[gameos] heap_fallback=1`; issue #47)
+
+**"Nested exception! - Cause: 'GetProcessorDetails' ... Attempt to read from
+address 0x00000094 at 0x6fabaa."** GameOS' error handler (3.1c
+`0x006FF600`, `__stdcall (flags, text)`) builds a report of the machine
+before it shows the error. Its `GetProcessorDetails` step allocates a
+12-byte object with `operator new` (`0x0040F3E0` = `gos_Malloc(size, -1)`).
+`-1` means "the current heap", the top of the stack kept by
+`gos_PushCurrentHeap` / `gos_PopCurrentHeap` (`0x006FB3C0` / `0x006FB400`,
+global `0x0123123C`); the bottom of that stack is null. `gos_Malloc`
+(`0x006FA790`) replaces a heap argument of 0 with the "Client Default" heap
+(`0x01231240`) but not the `-1` substitution:
+
+```text
+006FAA11  8B 45 0C           mov eax,[ebp+0C]        ; heap argument
+006FAA14  83 F8 FF           cmp eax,-1
+006FAA17  75 0B              jne 006FAA24
+006FAA19  8B 15 3C 12 23 01  mov edx,[0123123C]      ; current heap, may be 0
+006FAA1F  89 55 0C           mov [ebp+0C],edx
+006FAA22  EB 0C              jmp 006FAA30            ; no null check
+006FAA24  3B C7              cmp eax,edi             ; edi = 0
+006FAA26  75 08              jne 006FAA30
+006FAA28  A1 40 12 23 01     mov eax,[01231240]      ; Client Default heap
+006FAA2D  89 45 0C           mov [ebp+0C],eax
+...
+006FABAA  8A 88 94 00 00 00  mov cl,[eax+94h]        ; heap id -> fault on 0
+```
+
+An error raised while no heap is pushed (the mono sound-buffer path of #46,
+the fullscreen-switch errors of 2026-11-15) therefore crashed the handler,
+and the player saw this box instead of the real message. Every `0x6FABAA`
+entry in Windows Error Reporting is that: some other error first, then the
+handler's crash.
+
+The hook replaces the 11 bytes at `0x006FAA19`
+(`8B 15 <cur> 89 55 0C EB 0C`) with `A1 <cur> 89 45 0C 90 90 90`
+(`mov eax,[cur]; mov [ebp+0C],eax; nop x3`), so the code falls through to the
+existing "heap == 0" test and a null current heap uses Client Default. Only a
+call that would have faulted changes; a block records its heap in its header,
+so freeing it is unchanged. Verified: with `[gameos] heap_fallback=0` and
+`[debug] sound_lost=3` the game shows the issue's "Fatal Error" box (hook log
+`Attempt to read from address 0x00000094`); with the fix the same failure
+shows GameOS' normal Error dialog with the `DSERR_BUFFERLOST` text.
+`[gameos] heap_fallback=0` turns it off.
+
+**Error text in the hook log.** The handler is also detoured (9 bytes:
+`push ebp; mov ebp,esp; sub esp,1E0h`) so that every message it receives is
+written to `mw4hook-<pid>.log` before the dialog:
+`gameos: error #<n> (flags 0x182): FAILED (0x88780096 - DSERR_BUFFERLOST) -
+CreateSoundBuffer(...)`. GameOS passes its non-fatal warnings through the
+same handler with the same flags (DirectInput `Acquire`/`Poll` failures
+every frame, DirectPlay probes), so each distinct text is logged once; `n`
+counts all calls. The original error is then kept even if the handler
+itself fails.
 
 ### "Hardware Error" at startup: renderer choice and texture memory test
 
@@ -1103,6 +1207,9 @@ game's handler sees it.
 | new-'Mech skin copy | `0x00625E39`, `0x00625967` | 6-byte detours (a new pilot's default camouflage) |
 | campaign mission lookup | `0x0059A960` | 7-byte detour (full company, opt-in) |
 | drop zone next position | `0x004E61F0` | 6-byte detour (lancemates in an empty drop zone, full company) |
+| `gos_Malloc` current heap | `0x006FAA19` | 11 bytes: a null current heap falls through to the default heap (#47) |
+| GameOS error handler | `0x006FF600` | 9-byte detour (logs the error text, #47) |
+| `IDirectSound` | dsound.dll `DirectSoundCreate` (5-byte detour), vtable slots 2, 3, 5, 6 | background audio, lost-device recovery (#26, #46) |
 
 The last three are COM vtable hooks inside the `ddraw.dll` proxy; nothing in
 `MW4Mercs.exe` is patched for them.
@@ -1143,6 +1250,11 @@ sharp=1       ; sharper HUD text images (2x up to 1200, 4x above)
 names=1       ; roster 'Mech names redrawn from the MicroStyle font
 [sound]
 background=1  ; keep the audio playing when the window is not focused
+recover=1     ; (default, not in the shipped ini) survive a lost DirectSound device:
+              ; a new DirectSound on the same device, else silent buffers (#46)
+[gameos]
+heap_fallback=1 ; (default, not in the shipped ini) null current heap -> default heap,
+                ; so GameOS' error dialog shows the real error (#47)
 [input]
 controllers=1   ; (default, not in the shipped ini) open joysticks, gamepads, wheels;
                 ; they are listed on their own, so other HID devices cannot hide them
@@ -1165,6 +1277,8 @@ Development only (not shipped):
 [debug]
 automation=1  ; in-process test driver + frame capture (see below)
 dump_image=1  ; write the unpacked image to mw4hook-image-<pid>.bin
+sound_lost=N  ; GameOS' DirectSound loses every buffer from the Nth on (#46)
+sound_lost_all=1 ; with sound_lost: its replacement too (silent buffers)
 ```
 
 ## Build and install

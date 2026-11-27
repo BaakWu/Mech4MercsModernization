@@ -39,6 +39,7 @@ $sources = @(
     'dinput_proxy.cpp',
     'display.cpp',
     'dllmain.cpp',
+    'gameos.cpp',
     'input_probe.cpp',
     'iat.cpp',
     'imagehlp.cpp',

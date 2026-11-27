@@ -1565,10 +1565,14 @@ try {
         if (-not $results.Contains('CRASH-1')) {
             Test-Scenario 'CRASH-1' {
                 Assert (-not $script:crash) $script:crash
-                $sig = $hookLog + $ddrawLog | Where-Object { $_ -match '0x00667FA4|00667FA4|DSERR_BUFFERLOST|SoundPause|access violation|exception' -and $_ -notmatch '^auto:' }
+                # 'sound:' lines are the hook's own recovery from a lost DirectSound
+                # device (#46): the game went on, so they are reported, not failed.
+                $sig = $hookLog + $ddrawLog | Where-Object { $_ -match '0x00667FA4|00667FA4|DSERR_BUFFERLOST|SoundPause|access violation|exception' -and $_ -notmatch '^(auto|sound):' }
                 Assert (-not $sig) "crash signature in the log: $($sig | Select-Object -First 1)"
                 Assert ($script:gamePid -and (Get-Process -Id $script:gamePid -ErrorAction SilentlyContinue)) 'the game was not running at the end of the session'
-                'no dialog, no unexpected exit, no crash signature (#44)'
+                $recovered = @($hookLog | Where-Object { $_ -match '^sound: .*(still DSERR_BUFFERLOST|silent buffer)' }).Count
+                if ($recovered) { "no dialog, no unexpected exit, no crash signature (#44); sound recovered from $recovered lost-buffer event(s) (#46)" }
+                else { 'no dialog, no unexpected exit, no crash signature (#44)' }
             } | Out-Null
         }
         Stop-Game

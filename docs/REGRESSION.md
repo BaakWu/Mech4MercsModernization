@@ -84,7 +84,7 @@ The hook writes the test traces only with `[debug] automation=1`
 | COMP-1 | full company (#21) | fresh mission: the start heading is recorded, Numpad 0 (pressed again until the throttle shows full) for 40 s, X (a drive that was not full or straight is noted in the detail, not failed); the 7 lancemates must win (result screen `shell: 88` with result > 0) within 15 min; a timeout or a lost mission is retried (3 attempts); the full-company hook must log `lancemates 3 -> 7` |
 | THR-2 | decay on (#13) | after the drive: S and W tapped -> each eases back to 0; Numpad 5 = 0.5 holds; X holds 0 |
 | DISP-4 | 32-bit | every `gos_SetScreenMode` is 32-bit; no 16-bit depth buffer in the ddraw log |
-| CRASH-1 | crashes (#44) | no dialog in the game process, no Windows Error Reporting window, no unexpected exit, no `00667FA4` / `DSERR_BUFFERLOST` / `SoundPause` / exception in the logs; any of these stops the session |
+| CRASH-1 | crashes (#44) | no dialog in the game process, no Windows Error Reporting window, no unexpected exit, no `00667FA4` / `DSERR_BUFFERLOST` / `SoundPause` / exception in the logs; any of these stops the session. The hook's own `sound:` lines are left out: a lost DirectSound buffer it recovered from (#46) is counted in the result, not failed |
 | INST-2 | update | installer again: `decay` and `gyro` keep the player's values, `mw5`/`track_pointer` stay 1 |
 | INST-3 | uninstall | `imagehlp.dll` back, no patch file or log left, full manifest matches |
 
